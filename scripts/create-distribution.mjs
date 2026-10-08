@@ -18,6 +18,28 @@ if (process.platform === 'win32') {
   fs.writeFileSync(path.join(folder, 'README-Mac.txt'), `Animo ${version} — development build, not notarized.\nExtract with macOS Archive Utility. Run Open-Animo.command beside Animo.app to apply a local ad-hoc signature and open it. No Node.js installation needed.\nmacOS may require approval in Privacy & Security. Automated CI verifies launch, rendering and IPC; physical input, Retina monitors and Spaces still require manual verification.\n`);
   if (fs.existsSync(archive)) fs.unlinkSync(archive);
   execFileSync('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', folder, archive], { stdio: 'inherit' });
+  execFileSync('/usr/bin/unzip', ['-tq', archive], { stdio: 'inherit' });
+  const listing = execFileSync('/usr/bin/unzip', ['-Z', '-l', archive], { encoding: 'utf8' }).split('\n');
+  let links = 0, executables = 0;
+  const verifyModes = directory => {
+    for (const name of fs.readdirSync(directory)) {
+      const entry = path.join(directory, name), stat = fs.lstatSync(entry);
+      if (stat.isDirectory()) { verifyModes(entry); continue; }
+      const archived = path.relative(base, entry).split(path.sep).join('/');
+      const row = listing.find(line => line.endsWith(' ' + archived));
+      if (!row) throw new Error(`Mac archive entry missing: ${archived}`);
+      if (stat.isSymbolicLink()) {
+        if (row[0] !== 'l') throw new Error(`Mac symlink mode lost: ${archived}`);
+        links++;
+      } else if (stat.mode & 0o111) {
+        if (![row[3], row[6], row[9]].includes('x')) throw new Error(`Mac executable mode lost: ${archived}`);
+        executables++;
+      }
+    }
+  };
+  verifyModes(folder);
+  if (!links || !executables) throw new Error('Mac framework links or executable entries missing');
+  console.log(`Verified Mac download ZIP: ${links} symlinks, ${executables} executable files, complete contents and CRC.`);
 }
 const checksum = createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
 fs.writeFileSync(archive + '.sha256', `${checksum}  ${path.basename(archive)}\n`);
