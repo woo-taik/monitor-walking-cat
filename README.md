@@ -10,6 +10,7 @@ Electron + TypeScript + SVG를 사용하며 외부 서버나 AI API 없이 동�
 
 `Start-Animo.cmd` 또는 `release/Animo-win32-x64/Animo.exe`를 실행합니다.
 배포 폴더에는 Electron 런타임이 포함되어 있어 Node.js와 .NET을 따로 설치할 필요가 없습니다.
+배포 패키지는 한국어·영어 실행 엔진 언어 파일만 포함해 용량을 줄입니다. 다른 언어의 OS에서는 기본 엔진 문구가 영어로 표시될 수 있으며 앱의 한국어 UI와 입력·글꼴 처리는 유지됩니다. Mac 패키지도 같은 정책을 사용합니다.
 다른 PC에는 `release/Animo-win32-x64` **폴더 전체**를 복사하세요.
 
 ## Mac 실행

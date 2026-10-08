@@ -6,6 +6,7 @@ The included command applies a local ad-hoc signature on the target Mac.
 """
 import copy
 import plistlib
+import re
 import stat
 import sys
 import zipfile
@@ -49,6 +50,10 @@ def entry(name, data, mode=stat.S_IFREG | 0o644):
 
 with zipfile.ZipFile(source) as original, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=4) as archive:
     for item in original.infolist():
+        # Match the native packager: retain Korean and English runtime resources.
+        locales = re.findall(r"(?:^|/)([^/]+)\.lproj(?:/|$)", item.filename)
+        if any(not re.match(r"^(?:en|ko)(?:[-_].*)?$|^Base$", locale) for locale in locales):
+            continue
         # Development bundles are re-signed locally, never represented as notarized.
         if "/_CodeSignature/" in item.filename:
             continue

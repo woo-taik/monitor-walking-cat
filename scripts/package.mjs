@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { trimLocales } from './trim-locales.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const releaseDir = path.resolve(root, process.env.ANIMO_PACKAGE_OUT ?? 'release');
 const platform = process.argv[2] ?? process.platform;
@@ -52,4 +53,7 @@ const output = await packager({
   ...(process.env.ELECTRON_DOWNLOAD_MIRROR ? { download: { mirrorOptions: { mirror: process.env.ELECTRON_DOWNLOAD_MIRROR } } } : {})
 });
 if (output.length !== arch.length) throw new Error('One or more requested packages were not created.');
-for (const item of output) console.log(item);
+for (const item of output) {
+  trimLocales(item, platform);
+  console.log(item);
+}
