@@ -10,6 +10,13 @@ export async function runCiSmoke(controller: PetController, output: string) {
   fs.mkdirSync(output, { recursive: true });
   const lines: string[] = [];
   const win = controller.window;
+  const focusForInput = async () => {
+    // sendInputEvent requires a focused BrowserWindow (especially on macOS).
+    // This is a test-only precondition; normal launches keep the overlay non-focusable.
+    win.setFocusable(true); win.focus();
+    for (let tries = 0; tries < 100 && !win.isFocused(); tries++) await wait(25);
+    assert(win.isFocused(), 'Synthetic input requires focused test window');
+  };
   try {
     controller.stopForVerification(); controller.brain.pin(); controller.sendState();
     assert(!win.isFocusable()); assert(win.isAlwaysOnTop());
@@ -19,6 +26,7 @@ export async function runCiSmoke(controller: PetController, output: string) {
     // Hide can interrupt a press before pointerup/cancel reaches the renderer.
     // A new drag must still start rather than retaining the previous gesture/capture.
     for (const interrupted of [false, true]) {
+      await focusForInput();
       await win.webContents.executeJavaScript("window.animoPreview.render({pose:'sitting',time:1}); window.animo.hover(true)");
       if (interrupted) {
         win.webContents.sendInputEvent({ type: 'mouseDown', x: 105, y: 60, button: 'left', clickCount: 1 });
@@ -26,6 +34,7 @@ export async function runCiSmoke(controller: PetController, output: string) {
       }
       controller.toggleHidden(); await wait(50); assert(!win.isVisible());
       controller.toggleHidden(); await wait(50); assert(win.isVisible());
+      await focusForInput();
       await win.webContents.executeJavaScript("window.animoPreview.render({pose:'sitting',time:1}); window.animo.hover(true)");
       win.webContents.sendInputEvent({ type: 'mouseDown', x: 105, y: 60, button: 'left', clickCount: 1 });
       win.webContents.sendInputEvent({ type: 'mouseMove', x: 115, y: 60, button: 'left', modifiers: ['leftbuttondown'] });
@@ -44,6 +53,7 @@ export async function runCiSmoke(controller: PetController, output: string) {
     win.webContents.sendInputEvent({ type: 'mouseUp', x: 115, y: 60, button: 'left', clickCount: 1 });
     await wait(50); assert(!controller.state().frozen);
     lines.push('PASS: swallowed first mouse-down recovers dragging; incoming drags from another app are ignored.');
+    win.setFocusable(false); assert(!win.isFocusable());
     for (const pose of ['sitting', 'walking', 'sleeping', 'held', 'stretching', 'grooming', 'petted']) {
       await win.webContents.executeJavaScript(`window.animoPreview.render({pose:'${pose}',time:1.15,poseTime:1.5,gaitTime:1.15,speed:52,facingRight:true,frozen:false})`);
       await wait(80);

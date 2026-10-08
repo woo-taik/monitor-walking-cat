@@ -15,6 +15,8 @@ import { runCiSmoke } from './ci-smoke.js';
 
 const ciSmoke = process.argv.includes('--ci-smoke-test');
 const smoke = ciSmoke || process.argv.includes('--smoke-test');
+// Hosted Mac VMs may lack a usable GPU. Verify resources with software rendering.
+if (ciSmoke) app.disableHardwareAcceleration();
 const arg = (key: string) => { const i = process.argv.indexOf(key); return i >= 0 ? process.argv[i + 1] : undefined; };
 app.setName('Animo');
 if (smoke) {

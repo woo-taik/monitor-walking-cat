@@ -99,7 +99,7 @@ Windows에서는 OS 마우스·키보드 입력으로 고양이 우클릭, 메�
 
 `.github/workflows/build-release.yml`은 PR, `master` 변경, 수동 실행에서 Windows x64·Mac Apple Silicon arm64·Mac Intel x64를 각각 빌드합니다. 각 환경에서 단위 테스트와 **패키지 실행·7개 자세 렌더링·설정 창 IPC**를 확인한 다음 ZIP과 SHA-256 체크섬을 Actions 실행의 `download-*` 아티팩트에 보관합니다. 검증 로그와 스크린샷은 `verification-*`에 있으며, 아티팩트 보관 기간은 7일입니다.
 
-CI 검증은 실제 마우스를 움직이지 않습니다. 물리적인 다중 모니터·Retina 입력·메뉴 바깥 클릭·Spaces 검증은 기존 `npm run verify`와 실기기 확인을 사용합니다. Mac CI 빌드는 로컬 테스트용 ad-hoc 서명을 적용하며 Developer ID 서명·Apple 공증을 포함하지 않습니다.
+CI 검증은 소프트웨어 렌더링을 사용하고 합성 입력에 필요한 동안만 테스트 창에 포커스를 줍니다. 실제 마우스를 움직이지 않으며 정상 실행의 렌더링·포커스 정책은 유지합니다. 물리적인 다중 모니터·Retina 입력·메뉴 바깥 클릭·Spaces 검증은 기존 `npm run verify`와 실기기 확인을 사용합니다. Mac CI 빌드는 로컬 테스트용 ad-hoc 서명을 적용하며 Developer ID 서명·Apple 공증을 포함하지 않습니다.
 
 릴리스하려면 `package.json`과 `package-lock.json`의 버전을 함께 갱신하고 해당 커밋에 같은 버전의 `v` 태그를 붙여 푸시합니다. 예를 들어 앱 버전이 `0.4.0`이면 다음 명령을 사용합니다.
 
