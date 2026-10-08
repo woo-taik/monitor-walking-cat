@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "rootDir": "src",
+    "outDir": "dist/node",
+    "types": ["node"]
+  },
+  "include": ["src/main.ts", "src/preload.ts", "src/smoke.ts", "src/settings.ts", "src/shared/**/*.ts"]
+}

@@ -1,0 +1,12 @@
+import { contextBridge, ipcRenderer } from 'electron';
+import type { PetAPI, PetState, Point } from './shared/types.js';
+const api: PetAPI = {
+  onState(callback) { const listener = (_event: unknown, state: PetState) => callback(state); ipcRenderer.on('pet:state', listener); return () => ipcRenderer.removeListener('pet:state', listener); },
+  onCursor(callback) { const listener = (_event: unknown, point: Point) => callback(point); ipcRenderer.on('pet:cursor', listener); return () => ipcRenderer.removeListener('pet:cursor', listener); },
+  ready: () => ipcRenderer.send('pet:ready'),
+  hover: (overCat: boolean) => ipcRenderer.send('pet:hover', overCat),
+  beginDrag: () => ipcRenderer.send('pet:drag-start'),
+  endDrag: () => ipcRenderer.send('pet:drag-end'),
+  openMenu: (point: Point) => ipcRenderer.send('pet:menu', point)
+};
+contextBridge.exposeInMainWorld('animo', api);
