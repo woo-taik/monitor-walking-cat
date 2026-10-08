@@ -1,3 +1,4 @@
+import { PAW_DURATION } from './gait.js';
 import type { Bounds, Pose } from './types.js';
 export function clampPosition(x: number, y: number, bounds: Bounds, width: number, height: number) {
   return {
@@ -19,9 +20,20 @@ export class PetBrain {
   setBounds(bounds: Bounds) { this.bounds = bounds; this.setPosition(this.x, this.y); if (this.pose === 'walking') this.rest(); }
   pin(x = this.x, y = this.y) { this.roaming = false; this.setPosition(x, y); this.rest(); }
   hold() { this.roaming = false; this.changePose('held', 0); }
+  /** Walk to a chosen spot without changing whether the cat is roaming. */
+  approach(x: number, y: number) {
+    if (this.pose === 'held') return;
+    this.target = clampPosition(x, y, this.bounds, this.width, this.height);
+    this.facingRight = this.target.x >= this.x; this.changePose('walking', 0); this.gaitTime = 0;
+  }
   setRoaming(roaming: boolean) { this.roaming = roaming; this.rest(); this.remaining = roaming ? .4 : 3; }
   private changePose(pose: Pose, duration: number) { this.pose = pose; this.poseTime = 0; this.remaining = duration; this.speed = 0; }
   private rest() { this.changePose('sitting', 3 + this.random() * 5); }
+  /** One deliberate swipe at whatever is in front of the cat. */
+  paw() {
+    if (this.pose === 'held') return false;
+    this.changePose('pawing', PAW_DURATION); return true;
+  }
   pet() {
     if (this.pose === 'held' || this.petCooldown > 0) return false;
     this.petCooldown = 6; this.changePose('petted', 2.4); return true;
@@ -42,7 +54,7 @@ export class PetBrain {
       if (distance <= Math.max(.2 * scale, step)) { this.setPosition(this.target.x, this.target.y); this.rest(); }
       else this.setPosition(this.x + dx / distance * step, this.y + dy / distance * step);
     } else if (this.remaining <= 0) {
-      if (['sleeping', 'grooming', 'stretching', 'petted'].includes(this.pose)) this.rest();
+      if (['sleeping', 'grooming', 'stretching', 'petted', 'pawing'].includes(this.pose)) this.rest();
       else if (this.roaming && this.random() > .25) {
         this.target = {
           x: this.bounds.x + this.random() * Math.max(0, this.bounds.width - this.width),

@@ -11,6 +11,7 @@ function render(next: PreferencesSnapshot) {
   byId<HTMLInputElement>('roaming').checked = next.roaming;
   byId<HTMLSelectElement>('floor').value = next.floorOnly ? 'floor' : 'desktop';
   byId<HTMLInputElement>('click-through').checked = next.clickThrough;
+  byId<HTMLInputElement>('keep-awake').checked = next.keepAwake;
   byId<HTMLInputElement>('workspaces').checked = next.allWorkspaces;
   byId('workspaces-row').hidden = next.platform !== 'darwin';
   byId('ghost-note').hidden = !next.clickThrough;
@@ -58,7 +59,7 @@ function post(command: PreferencesCommand) {
   }).catch(error => message(String(error.message ?? error).replace(/^Error invoking remote method '[^']+': Error: /, ''), true));
 }
 for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="size"]')) radio.addEventListener('change', () => post({ kind: 'size', value: Number(radio.value) }));
-for (const [id, kind] of [['roaming', 'roaming'], ['click-through', 'click-through'], ['workspaces', 'all-workspaces']] as const) byId<HTMLInputElement>(id).addEventListener('change', event => post({ kind, value: (event.target as HTMLInputElement).checked }));
+for (const [id, kind] of [['roaming', 'roaming'], ['click-through', 'click-through'], ['keep-awake', 'keep-awake'], ['workspaces', 'all-workspaces']] as const) byId<HTMLInputElement>(id).addEventListener('change', event => post({ kind, value: (event.target as HTMLInputElement).checked }));
 byId<HTMLSelectElement>('floor').addEventListener('change', event => post({ kind: 'floor-only', value: (event.target as HTMLSelectElement).value === 'floor' }));
 byId<HTMLSelectElement>('display').addEventListener('change', event => post({ kind: 'display', id: (event.target as HTMLSelectElement).value }));
 byId('pause').addEventListener('click', () => { if (snapshot) post({ kind: 'paused', value: !snapshot.paused }); });

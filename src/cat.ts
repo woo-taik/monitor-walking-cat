@@ -1,4 +1,4 @@
-import { legStep } from './shared/gait.js';
+import { legStep, pawReach, pawSwishFade } from './shared/gait.js';
 import type { PetState, Point } from './shared/types.js';
 const fur = '#FFD99B', cream = '#FFF0D0', stripe = '#DE9959', pink = '#F3A2A3', ink = '#594136';
 type Attributes = Record<string, string>;
@@ -31,16 +31,18 @@ export function catFrame(state: PetState, markup = false, prefix = 'cat', facing
   };
   const body = () => {
     let far: string, shape: string, detail: string, belly: string, feet: string;
-    if (['sitting', 'grooming', 'petted'].includes(state.pose)) {
+    if (['sitting', 'grooming', 'petted', 'pawing'].includes(state.pose)) {
       const backFoot = { x: 58, y: 124 - bob }, grooming = state.pose === 'grooming';
-      const frontFoot = { x: grooming ? 111 : 107, y: grooming ? 79 + Math.sin(poseTime * 9) * 2 : 124 - bob };
+      const reach = state.pose === 'pawing' ? pawReach(poseTime) : undefined;
+      const frontFoot = reach ?? { x: grooming ? 111 : 107, y: grooming ? 79 + Math.sin(poseTime * 9) * 2 : 124 - bob };
       far = leg({ x: 94, y: 91 }, { x: 94, y: 108 }, { x: 92, y: 120 - bob }, { x: 92, y: 123 - bob });
       const torso = 'M39,120 C30,104 39,84 55,75 C72,66 87,71 96,86 Q108,94 108,111 L105,125 Q76,131 52,128 Z';
       const rear = `M44,114 Q56,111 62,${backFoot.y - 5} Q70,${backFoot.y - 4} 70,${backFoot.y + 2} Q69,${backFoot.y + 5} 58,${backFoot.y + 5} L46,${backFoot.y + 5} Q39,${backFoot.y + 1} 44,114 Z`;
-      const front = leg({ x: 105, y: 90 }, { x: 103, y: grooming ? 100 : 107 }, { x: grooming ? 110 : 104, y: frontFoot.y - 4 }, frontFoot);
+      // The swiping foreleg is drawn last, over the face, so it never hides inside the body.
+      const front = reach ? '' : leg({ x: 105, y: 90 }, { x: 103, y: grooming ? 100 : 107 }, { x: grooming ? 110 : 104, y: frontFoot.y - 4 }, frontFoot);
       shape = path(torso, fur, 'none') + path(rear, fur, 'none') + path(front, fur, 'none');
       detail = path('M44,100 C58,96 69,104 64,115 Q62,119 57,120', 'none', ink, 1.9) + path('M47,80 Q48,87 55,90 M60,73 Q61,82 67,85', 'none', stripe, 4);
-      belly = ellipse(94, 101, 16, 22, cream); feet = toes(backFoot) + toes(frontFoot);
+      belly = ellipse(94, 101, 16, 22, cream); feet = toes(backFoot) + (reach ? '' : toes(frontFoot));
     } else {
       const farRear = movingLeg(60, true, .75), farFront = movingLeg(94, false, .5);
       const nearRear = movingLeg(48, true, .25), nearFront = movingLeg(107, false, 0);
@@ -79,12 +81,23 @@ export function catFrame(state: PetState, markup = false, prefix = 'cat', facing
     + node('text', { x: 129, y: 84 - Math.sin(t) * 3, fill: stripe, 'font-size': 14, 'font-family': 'system-ui', 'pointer-events': 'none' }, markup ? 'z' : '')
     + node('text', { x: 139, y: 71 - Math.sin(t + 1) * 3, fill: stripe, 'font-size': 14, 'font-family': 'system-ui', 'pointer-events': 'none' }, markup ? 'z' : '');
   const tail = `M43,100 C13,99 15,${62 + Math.sin(t * 2.5) * 6 - stretch * 8} 28,${60 + Math.sin(t * 2.5) * 6 - stretch * 8}`;
+  const swipe = state.pose === 'pawing' ? (() => {
+    const reach = pawReach(poseTime), fade = pawSwishFade(poseTime);
+    const trails = group({ opacity: fade * .5, 'pointer-events': 'none' },
+      path(`M${reach.x - 36},${reach.y - 9} Q${reach.x - 22},${reach.y - 7} ${reach.x - 12},${reach.y - 4}`, 'none', ink, 2.4)
+      + path(`M${reach.x - 31},${reach.y + 6} Q${reach.x - 19},${reach.y + 4} ${reach.x - 11},${reach.y + 2}`, 'none', ink, 1.9));
+    // Same shoulder and joint shape as the seated foreleg, so the pose blends without a pop.
+    const arm = path(leg({ x: 105, y: 90 }, { x: (105 + reach.x) / 2 + 2, y: (90 + reach.y) / 2 + 4 }, { x: reach.x - 5, y: reach.y - 4 }, reach), fur);
+    const pad = path(`M${reach.x - 1},${reach.y - 1} Q${reach.x + 4},${reach.y + 2} ${reach.x - 1},${reach.y + 5}`, 'none', pink, 3);
+    return trails + arm + pad;
+  })() : '';
   const groomingPaw = state.pose === 'grooming' ? path(leg({ x: 106, y: 104 }, { x: 112, y: 105 }, { x: 108, y: 96 }, { x: 102, y: 92 + Math.sin(poseTime * 9) * 1.5 }), fur)
     + path(`M104,85 Q108,${88 + Math.sin(poseTime * 9) * 2} 107,91`, 'none', pink, 3) : '';
-  const art = state.pose === 'sleeping' ? sleeping() : path(tail, 'none', ink, 15) + path(tail, 'none', fur, 10) + body() + face() + groomingPaw;
+  const art = state.pose === 'sleeping' ? sleeping() : path(tail, 'none', ink, 15) + path(tail, 'none', fur, 10) + body() + face() + groomingPaw + swipe;
   const hearts = state.pose === 'petted' ? group({ opacity: contentment * .85, transform: `translate(0 ${-poseTime * 5})`, 'pointer-events': 'none' }, path('M138,36 C132,30 125,37 138,46 C151,37 144,30 138,36 Z', pink, 'none')) : '';
   const shadow = ellipse(83, 132, state.pose === 'sleeping' ? 48 : 43, 3, state.pose === 'held' ? 'transparent' : '#00000018');
-  const character = group({ transform: `translate(0 ${bob})`, 'data-cat': 'true', 'pointer-events': 'visiblePainted' }, art);
+  const lunge = state.pose === 'pawing' ? pawSwishFade(poseTime) * 8 : 0;
+  const character = group({ transform: `translate(${lunge} ${bob})`, 'data-cat': 'true', 'pointer-events': 'visiblePainted' }, art);
   const scene = group({ transform: `translate(80 0) scale(${facing} 1) translate(-80 0)` }, shadow + character + hearts);
   const filter = markup ? `<defs><filter id="${prefix}-outline" x="-20%" y="-20%" width="140%" height="140%"><feMorphology in="SourceAlpha" operator="dilate" radius="1.4" result="outer"/><feFlood flood-color="${ink}"/><feComposite in2="outer" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>` : '';
   return { attributes, markup: markup ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 144" aria-label="작은 고양이" style="pointer-events:none">${filter}${scene}</svg>` : '' };

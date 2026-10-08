@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerMonitor, screen, Tray, type Display, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, screen, Tray, type Display, type MenuItemConstructorOptions } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -8,6 +8,9 @@ import { PetBrain } from './shared/brain.js';
 import { menuPoint } from './shared/placement.js';
 import { frameInterval } from './shared/cadence.js';
 import { anchorPosition, relativePosition, resolvePreset } from './shared/presets.js';
+import { approachTarget, inPushRange, legTimeout, pawPoint, pushPath, wantsNudge } from './shared/keepawake.js';
+import { PAW_DURATION, PAW_STRIKE_TIME } from './shared/gait.js';
+import { cancelCursorPush, pushCursor } from './cursor.js';
 import { defaults, loadSettings, saveSettings } from './settings.js';
 import type { Anchor, PetState, Point, PreferencesSnapshot, Settings } from './shared/types.js';
 import { runSmoke } from './smoke.js';
@@ -73,6 +76,13 @@ export class PetController {
   private lastState = '';
   private lastCursor = '';
   private verificationStopped = false;
+  private blocker?: number;
+  private nudge: 'idle' | 'approach' | 'paw' | 'return' = 'idle';
+  private struck = false;
+  private nudgeHome?: Point;
+  private nudgeElapsed = 0;
+  private nudgeDeadline = 0;
+  private sinceNudge = 0;
   private readonly settingsFile = path.join(app.getPath('userData'), 'settings.json');
   isMenuOpen() { return this.menuOpen; }
   isMouseIgnored() { return this.ignored; }
@@ -121,6 +131,7 @@ export class PetController {
       this.shortcutRecall = globalShortcut.register(`${prefix}+R`, () => this.recall());
       this.saveTimer = setInterval(() => this.save(), 15000);
     }
+    this.applyKeepAwake();
     this.lastTick = performance.now();
     this.battery = powerMonitor.isOnBatteryPower();
     powerMonitor.on('suspend', this.suspend); powerMonitor.on('resume', this.resume);
@@ -189,7 +200,7 @@ export class PetController {
   }
   preferencesSnapshot(): PreferencesSnapshot {
     return { size: this.settings.size, roaming: this.brain.roaming, floorOnly: this.brain.floorOnly, clickThrough: this.settings.clickThrough,
-      allWorkspaces: this.settings.allWorkspaces, hidden: this.hidden, paused: this.paused, platform: process.platform, displayId: String(this.display.id),
+      allWorkspaces: this.settings.allWorkspaces, keepAwake: this.settings.keepAwake, hidden: this.hidden, paused: this.paused, platform: process.platform, displayId: String(this.display.id),
       displays: screen.getAllDisplays().map((d, index) => ({ id: String(d.id), name: `모니터 ${index + 1}${d.id === screen.getPrimaryDisplay().id ? ' (주 화면)' : ''}${d.label ? ` · ${d.label}` : ''}` })),
       presets: this.settings.presets.map(p => ({ ...p })) };
   }
@@ -236,6 +247,7 @@ export class PetController {
       case 'roaming': this.setRoaming(boolean()); break;
       case 'floor-only': this.setFloorOnly(boolean()); break;
       case 'click-through': this.setClickThrough(boolean()); break;
+      case 'keep-awake': this.setKeepAwake(boolean()); break;
       case 'paused': this.setPaused(boolean()); break;
       case 'hidden': if (boolean() !== this.hidden) this.toggleHidden(); break;
       case 'all-workspaces': {
@@ -267,8 +279,75 @@ export class PetController {
     else if (!this.paused && !this.menuOpen && !this.pointerPressed) {
       this.brain.tick(delta); this.time += delta; this.moveWindow();
     }
+    this.updateKeepAwake(delta);
     this.sendState();
     this.sendCursor();
+  }
+
+  private applyKeepAwake() {
+    const wanted = this.settings.keepAwake && !this.testing;
+    if (wanted && this.blocker === undefined) this.blocker = powerSaveBlocker.start('prevent-display-sleep');
+    else if (!wanted && this.blocker !== undefined) { powerSaveBlocker.stop(this.blocker); this.blocker = undefined; }
+  }
+  setKeepAwake(value: boolean) {
+    this.settings.keepAwake = value;
+    this.applyKeepAwake();
+    if (!value) this.endNudge(false);
+    this.refreshTray(); this.save();
+  }
+  isKeepingAwake() { return this.blocker !== undefined && powerSaveBlocker.isStarted(this.blocker); }
+  /** Walk to the cursor, swipe at it, then go back to the spot the cat was keeping. */
+  private updateKeepAwake(delta: number) {
+    const busy = this.dragging || this.paused || this.menuOpen || this.pointerPressed || this.hidden || this.systemStops.size > 0;
+    this.sinceNudge += delta;
+    if (this.nudge === 'idle') {
+      if (!wantsNudge({ enabled: this.settings.keepAwake, busy, idleSeconds: powerMonitor.getSystemIdleTime(), sinceNudge: this.sinceNudge })) return;
+      this.nudgeHome = { x: this.brain.x, y: this.brain.y };
+      this.beginNudgeLeg('approach', approachTarget(screen.getCursorScreenPoint(), this.display.workArea, this.brain.width, this.brain.height).point);
+      return;
+    }
+    this.nudgeElapsed += delta;
+    if (busy || !this.settings.keepAwake) { this.endNudge(false); return; }
+    const expired = this.nudgeElapsed > this.nudgeDeadline, home = this.nudgeHome!;
+    if (this.nudge === 'paw') {
+      // The cursor flies at the moment the paw reaches it, not when the cat arrives.
+      if (!this.struck && this.brain.poseTime >= PAW_STRIKE_TIME) { this.struck = true; this.shoveCursor(); }
+      if (this.brain.pose === 'pawing' && !expired) return;
+      this.beginNudgeLeg('return', home);
+      return;
+    }
+    if (this.brain.pose === 'walking' && !expired) return;
+    if (this.nudge === 'approach') {
+      if (expired || !this.cursorInReach()) { this.beginNudgeLeg('return', home); return; }
+      this.nudge = 'paw'; this.struck = false; this.nudgeElapsed = 0; this.nudgeDeadline = PAW_DURATION + 2;
+      this.brain.paw();
+      return;
+    }
+    this.endNudge(true);
+  }
+  private cursorInReach() {
+    return inPushRange(pawPoint(this.brain, this.brain.width, this.brain.height, this.brain.facingRight), screen.getCursorScreenPoint(), this.brain.width / 160);
+  }
+  private beginNudgeLeg(stage: 'approach' | 'return', point: Point) {
+    this.nudge = stage; this.nudgeElapsed = 0;
+    this.nudgeDeadline = legTimeout(this.brain, point, this.brain.width / 160);
+    this.brain.approach(point.x, point.y);
+  }
+  private shoveCursor() {
+    const cursor = screen.getCursorScreenPoint();
+    const paw = pawPoint(this.brain, this.brain.width, this.brain.height, this.brain.facingRight);
+    if (!inPushRange(paw, cursor, this.brain.width / 160)) return;
+    const path = pushPath(paw, cursor, this.display.bounds);
+    pushCursor(process.platform === 'win32' ? path.map(point => screen.dipToScreenPoint(point)) : path);
+  }
+  private endNudge(settle: boolean) {
+    if (this.nudge === 'idle') return;
+    const home = this.nudgeHome;
+    this.nudge = 'idle'; this.nudgeHome = undefined; this.nudgeElapsed = 0; this.sinceNudge = 0; this.struck = false;
+    cancelCursorPush();
+    // A pinned cat re-pins on its own spot so the saved place survives the errand.
+    // Hands off while the cat is being held: the user's grab wins.
+    if (settle && home && !this.brain.roaming) { this.brain.pin(home.x, home.y); this.moveWindow(); }
   }
   private sendCursor() {
     const cursor = screen.getCursorScreenPoint(), bounds = this.window.getBounds();
@@ -407,6 +486,7 @@ export class PetController {
         ...(this.settings.presets.length ? [{ type: 'separator' as const }, ...this.settings.presets.map(p => ({ id: `preset-${p.id}`, label: process.platform === 'win32' ? p.name.replace(/&/g, '&&') : p.name, click: () => { const fallback = this.loadPosition(p.id); if (fallback) void dialog.showMessageBox({ title: 'Animo', message: '저장했던 모니터가 연결되어 있지 않아 주 화면에 배치했습니다.' }); } }))] : [])
       ] },
       checkbox('click-through', '고양이도 클릭 통과', this.settings.clickThrough, () => this.setClickThrough(!this.settings.clickThrough)),
+      checkbox('keep-awake', '화면보호기 방지', this.settings.keepAwake, () => this.setKeepAwake(!this.settings.keepAwake)),
       { id: 'hide', label: this.hidden ? '고양이 보이기' : '고양이 숨기기', click: () => this.toggleHidden() },
       { id: 'recall', label: '고양이 찾기 · 위치 초기화', click: () => this.recall() }
     ];
@@ -452,10 +532,10 @@ export class PetController {
   private refreshTray() { this.tray?.setContextMenu(this.menu()); this.publishPreferences(); }
   save() {
     if (this.testing || this.disposed) return;
-    const a = this.display.workArea;
+    const a = this.display.workArea, spot = this.nudgeHome ?? this.brain;
     Object.assign(this.settings, { displayId: String(this.display.id), displayLabel: this.display.label,
-      relativeX: Math.max(0, Math.min(1, (this.brain.x - a.x) / Math.max(1, a.width - this.brain.width))),
-      relativeY: Math.max(0, Math.min(1, (this.brain.y - a.y) / Math.max(1, a.height - this.brain.height))),
+      relativeX: Math.max(0, Math.min(1, (spot.x - a.x) / Math.max(1, a.width - this.brain.width))),
+      relativeY: Math.max(0, Math.min(1, (spot.y - a.y) / Math.max(1, a.height - this.brain.height))),
       roaming: this.brain.roaming, floorOnly: this.brain.floorOnly });
     try { saveSettings(this.settingsFile, this.settings); this.saveFailed = false; }
     catch (error) { this.saveFailed = true; console.error('Settings save failed:', error); if (!this.warnedSave) { this.warnedSave = true; void dialog.showMessageBox({ title: 'Animo', type: 'warning', message: '설정을 저장하지 못했습니다. 다음 실행에서는 위치가 초기화될 수 있습니다.' }); } }
@@ -463,6 +543,8 @@ export class PetController {
   dispose() {
     if (this.disposed) return;
     this.save(); this.disposed = true;
+    if (this.blocker !== undefined) { powerSaveBlocker.stop(this.blocker); this.blocker = undefined; }
+    cancelCursorPush();
     this.preferencesWindow?.destroy();
     if (this.timer) clearTimeout(this.timer); if (this.saveTimer) clearInterval(this.saveTimer);
     globalShortcut.unregisterAll(); this.tray?.destroy();

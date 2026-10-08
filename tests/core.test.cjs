@@ -4,12 +4,13 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { PetBrain, clampPosition } = require('../dist/node/shared/brain.js');
-const { legStep } = require('../dist/node/shared/gait.js');
+const { legStep, pawReach, pawSwishFade, PAW_DURATION, PAW_STRIKE_TIME } = require('../dist/node/shared/gait.js');
 const { menuPoint } = require('../dist/node/shared/placement.js');
 const { validateSettings, loadSettings, saveSettings } = require('../dist/node/settings.js');
 const { PetGesture } = require('../dist/node/shared/gesture.js');
 const { frameInterval } = require('../dist/node/shared/cadence.js');
 const { anchorPosition, relativePosition, resolvePreset } = require('../dist/node/shared/presets.js');
+const { wantsNudge, approachTarget, pawPoint, inPushRange, pushPath, legTimeout, NUDGE_IDLE_SECONDS, NUDGE_INTERVAL_SECONDS } = require('../dist/node/shared/keepawake.js');
 function rng() { let seed = 42; return () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; }
 test('roaming stays within negative monitor work areas and visits all poses', () => {
   const brain = new PetBrain({ x: -1920, y: -1080, width: 1920, height: 1032 }, rng());
@@ -153,4 +154,72 @@ test('v2 settings migrate without losing options; presets validate, deduplicate,
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'animo-presets-'));
   try { const file = path.join(directory, 'settings.json'); saveSettings(file, checked); assert.deepEqual(loadSettings(file), checked); }
   finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('screen saver nudge waits for a real absence, keeps the cat off the user and defaults to off', () => {
+  const ready = { enabled: true, busy: false, idleSeconds: NUDGE_IDLE_SECONDS, sinceNudge: NUDGE_INTERVAL_SECONDS };
+  assert.equal(wantsNudge(ready), true);
+  assert.equal(wantsNudge({ ...ready, enabled: false }), false);
+  assert.equal(wantsNudge({ ...ready, busy: true }), false, 'never walks off while dragged, paused or hidden');
+  assert.equal(wantsNudge({ ...ready, idleSeconds: NUDGE_IDLE_SECONDS - 1 }), false, 'someone still at the desk is left alone');
+  assert.equal(wantsNudge({ ...ready, sinceNudge: NUDGE_INTERVAL_SECONDS - 1 }), false, 'shoves stay spaced out');
+  assert.equal(validateSettings({}).keepAwake, false, 'opt-in only');
+  assert.equal(validateSettings({ keepAwake: true }).keepAwake, true);
+});
+
+test('the cat approaches the cursor from the side with room and shoves it away from the paw, inside the screen', () => {
+  const area = { x: 0, y: 0, width: 1440, height: 900 }, width = 160, height = 144;
+  const right = approachTarget({ x: 900, y: 500 }, area, width, height);
+  assert.equal(right.facingRight, true, 'open space on the left means walking up from the left');
+  const paw = pawPoint(right.point, width, height, right.facingRight);
+  assert.ok(Math.abs(paw.x - 900) < 1 && Math.abs(paw.y - 500) < 1, 'the front paw lands on the cursor');
+  assert.equal(inPushRange(paw, { x: 900, y: 500 }, 1), true);
+
+  const left = approachTarget({ x: 40, y: 500 }, area, width, height);
+  assert.equal(left.facingRight, false, 'no room on the left, so approach from the right');
+  assert.ok(left.point.x >= area.x, 'stays on screen');
+
+  const high = approachTarget({ x: 900, y: 120 }, area, width, height);
+  assert.ok(inPushRange(pawPoint(high.point, width, height, high.facingRight), { x: 900, y: 120 }, 1),
+    'the errand leaves the floor so a cursor further up is still reachable');
+  const offscreen = approachTarget({ x: 2600, y: 500 }, area, width, height);
+  assert.equal(inPushRange(pawPoint(offscreen.point, width, height, offscreen.facingRight), { x: 2600, y: 500 }, 1), false,
+    'a cursor on another monitor is out of reach and the shove is skipped');
+
+  const path = pushPath({ x: 870, y: 500 }, { x: 900, y: 500 }, { x: 0, y: 0, width: 1440, height: 900 });
+  assert.ok(path.length > 1);
+  assert.ok(path[path.length - 1].x > path[0].x && path[0].x > 900, 'the cursor is pushed away from the paw');
+  assert.ok(path.every(p => p.x >= 2 && p.x <= 1438 && p.y >= 2 && p.y <= 898), 'the cursor never leaves the screen');
+  const edge = pushPath({ x: 1400, y: 500 }, { x: 1435, y: 500 }, { x: 0, y: 0, width: 1440, height: 900 });
+  assert.ok(edge.every(p => p.x <= 1438), 'a shove at the edge clamps instead of pushing the cursor off');
+});
+
+test('the errand allows enough time to actually cross the screen, at any cat size', () => {
+  // The brain tops out at 52 DIP/s scaled by the cat's size, so a leg must be allowed at least that long.
+  for (const scale of [0.75, 1, 1.35]) {
+    for (const distance of [120, 605, 1512, 3840]) {
+      const walk = distance / (52 * scale);
+      const allowance = legTimeout({ x: 0, y: 0 }, { x: distance, y: 0 }, scale);
+      assert.ok(allowance > walk, `scale ${scale}, ${distance}px needs ${walk.toFixed(1)}s but only ${allowance.toFixed(1)}s allowed`);
+    }
+  }
+  assert.ok(legTimeout({ x: 0, y: 0 }, { x: 0, y: 0 }, 1) >= 5, 'a cat already in place still gets a moment');
+});
+
+test('the paw swipe starts and ends on the seated foreleg, and strikes past the cursor', () => {
+  const rest = pawReach(0);
+  assert.deepEqual(pawReach(PAW_DURATION), rest, 'the pose must end where it began so sitting blends in without a pop');
+  assert.deepEqual(pawReach(-5), rest); assert.deepEqual(pawReach(PAW_DURATION + 5), rest, 'clamped outside the pose');
+
+  const strike = pawReach(PAW_STRIKE_TIME);
+  // The cat stands so the cursor sits at 0.86 x 160 = 137.6 in its own view box.
+  assert.ok(strike.x > 137.6, `the paw must reach through the cursor, got ${strike.x}`);
+  assert.ok(strike.x > rest.x + 30 && strike.y < rest.y - 15, 'the strike is a long reach forward and up from sitting');
+
+  const windUp = pawReach(.40);
+  assert.ok(windUp.x < rest.x, 'the paw cocks backwards first');
+  assert.ok(windUp.y > 93, 'the wind-up stays below the face instead of covering it');
+
+  assert.equal(pawSwishFade(0), 0); assert.equal(pawSwishFade(PAW_DURATION), 0, 'no streaks at rest');
+  assert.ok(pawSwishFade(PAW_STRIKE_TIME) > .5, 'streaks are brightest through the strike');
 });
