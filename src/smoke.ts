@@ -254,7 +254,7 @@ export async function runSmoke(controller: PetController, output: string) {
     controller.recall();
     assert.equal(controller.settings.clickThrough, false); assert.equal(controller.brain.roaming, false);
     lines.push('PASS: recall restores visibility and a controllable cat on the primary display.');
-    for (const pose of ['sitting', 'walking', 'sleeping', 'held', 'stretching', 'grooming', 'petted']) {
+    for (const pose of ['sitting', 'walking', 'sleeping', 'held', 'stretching', 'grooming', 'petted', 'pawing']) {
       await win.webContents.executeJavaScript(`window.animoPreview.render({pose:'${pose}',time:1.15,poseTime:1.5,gaitTime:1.15,speed:52,facingRight:true,frozen:false})`);
       await wait(80);
       const image = await win.webContents.capturePage();
@@ -267,7 +267,7 @@ export async function runSmoke(controller: PetController, output: string) {
     await win.webContents.executeJavaScript("window.animoPreview.render({pose:'walking',time:.34,gaitTime:.34,speed:52,facingRight:false})");
     await wait(80);
     fs.writeFileSync(path.join(output, 'walking-left.png'), (await win.webContents.capturePage()).toPNG());
-    lines.push('PASS: 7 poses and mirrored walking rendered; transparent corners verified.');
+    lines.push('PASS: 8 poses and mirrored walking rendered; transparent corners verified.');
     const preferences = await controller.openPreferences();
     await until(async () => await preferences.webContents.executeJavaScript('document.querySelectorAll("#display option").length') === screen.getAllDisplays().length, 'Preferences did not initialize');
     assert(preferences.isVisible()); assert(preferences.isFocusable()); assert(!preferences.isAlwaysOnTop());

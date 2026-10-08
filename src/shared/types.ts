@@ -1,4 +1,4 @@
-export type Pose = 'sitting' | 'walking' | 'sleeping' | 'held' | 'stretching' | 'grooming' | 'petted';
+export type Pose = 'sitting' | 'walking' | 'sleeping' | 'held' | 'stretching' | 'grooming' | 'petted' | 'pawing';
 export interface Point { x: number; y: number }
 export interface Bounds extends Point { width: number; height: number }
 export interface PetState {
@@ -23,6 +23,7 @@ export interface Settings {
   floorOnly: boolean;
   clickThrough: boolean;
   allWorkspaces: boolean;
+  keepAwake: boolean;
   presets: PositionPreset[];
 }
 export interface PositionPreset {
@@ -40,6 +41,7 @@ export interface PreferencesSnapshot {
   floorOnly: boolean;
   clickThrough: boolean;
   allWorkspaces: boolean;
+  keepAwake: boolean;
   hidden: boolean;
   paused: boolean;
   platform: string;
@@ -49,7 +51,7 @@ export interface PreferencesSnapshot {
 }
 export type PreferencesCommand =
   | { kind: 'size'; value: number }
-  | { kind: 'roaming' | 'floor-only' | 'click-through' | 'all-workspaces' | 'hidden' | 'paused'; value: boolean }
+  | { kind: 'roaming' | 'floor-only' | 'click-through' | 'all-workspaces' | 'keep-awake' | 'hidden' | 'paused'; value: boolean }
   | { kind: 'display'; id: string }
   | { kind: 'anchor'; anchor: Anchor; displayId: string }
   | { kind: 'save-position'; name: string }

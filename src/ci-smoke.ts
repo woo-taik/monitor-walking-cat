@@ -54,7 +54,7 @@ export async function runCiSmoke(controller: PetController, output: string) {
     await wait(50); assert(!controller.state().frozen);
     lines.push('PASS: swallowed first mouse-down recovers dragging; incoming drags from another app are ignored.');
     win.setFocusable(false); assert(!win.isFocusable());
-    for (const pose of ['sitting', 'walking', 'sleeping', 'held', 'stretching', 'grooming', 'petted']) {
+    for (const pose of ['sitting', 'walking', 'sleeping', 'held', 'stretching', 'grooming', 'petted', 'pawing']) {
       await win.webContents.executeJavaScript(`window.animoPreview.render({pose:'${pose}',time:1.15,poseTime:1.5,gaitTime:1.15,speed:52,facingRight:true,frozen:false})`);
       await wait(80);
       assert(await win.webContents.executeJavaScript('document.querySelectorAll("#pet svg path").length > 0'));

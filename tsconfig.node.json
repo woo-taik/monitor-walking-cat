@@ -11,5 +11,5 @@
     "outDir": "dist/node",
     "types": ["node"]
   },
-  "include": ["src/main.ts", "src/preload.ts", "src/preferences-preload.ts", "src/smoke.ts", "src/ci-smoke.ts", "src/settings.ts", "src/shared/**/*.ts"]
+  "include": ["src/main.ts", "src/cursor.ts", "src/preload.ts", "src/preferences-preload.ts", "src/smoke.ts", "src/ci-smoke.ts", "src/settings.ts", "src/shared/**/*.ts"]
 }
