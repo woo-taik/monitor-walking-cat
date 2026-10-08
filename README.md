@@ -25,7 +25,7 @@ Node.js와 .NET 설치는 필요하지 않습니다.
 macOS 보안 설정에서 사용자 승인이 필요할 수 있습니다. 일반 사용자에게 정식 배포하려면 Mac에서 Developer ID 서명과 Apple 공증을 진행해야 합니다.
 
 Mac에서 직접 빌드하면 Electron Packager로 `release/Animo-darwin-arm64/Animo.app`과 `release/Animo-darwin-x64/Animo.app`을 생성합니다.
-실제 표시·입력 동작 검증은 아직 Mac에서 수행하지 않았습니다.
+Mac CI에서 패키지 실행·7개 자세 렌더링·설정 IPC·합성 입력을 검증합니다. 실제 마우스 입력, Retina·다중 모니터, Spaces 동작은 실기기 확인이 필요합니다.
 
 ## 사용
 

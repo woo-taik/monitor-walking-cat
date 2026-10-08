@@ -345,7 +345,7 @@ export async function runSmoke(controller: PetController, output: string) {
     await until(async () => await reopened.webContents.executeJavaScript(`document.querySelectorAll('[data-load]').length`) === 2, 'Saved positions disappeared on reopen');
     reopened.close(); await wait(50);
     lines.push('PASS: saved positions work from native menus and survive settings-window close/reopen; closing settings leaves the cat running.');
-    lines.push(`INFO: platform=${process.platform}, Electron=${process.versions.electron}; macOS runtime verification still requires a Mac.`);
+    lines.push(`INFO: platform=${process.platform}, Electron=${process.versions.electron}; macOS physical input/Spaces require manual verification; CI covers packaged runtime.`);
     fs.writeFileSync(path.join(output, 'electron-smoke.txt'), lines.join('\n'));
     console.log(lines.join('\n'));
   } catch (error) {
