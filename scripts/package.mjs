@@ -8,6 +8,17 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const platform = process.argv[2] ?? process.platform;
 const arch = (process.argv[3] ?? process.arch).split(',');
+// Fail before Packager removes any files if an existing Windows package is open.
+if (platform === 'win32' && process.platform === 'win32') {
+  for (const cpu of arch) {
+    const executable = path.join(root, 'release', `Animo-win32-${cpu}`, 'Animo.exe');
+    const check = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      '$animoBusy = @(Get-Process Animo -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:ANIMO_PACKAGE_PATH }); if ($animoBusy.Count -gt 0) { exit 2 }'],
+      { env: { ...process.env, ANIMO_PACKAGE_PATH: executable }, stdio: 'inherit' });
+    if (check.status === 2) throw new Error(`Close the running Animo before packaging: ${executable}`);
+    if (check.status !== 0) throw new Error('Could not check whether the existing Windows package is running.');
+  }
+}
 // Package only the compiled, dependency-free application; no SDKs, source or test artifacts.
 const staging = path.join(root, 'artifacts', 'electron-staging');
 fs.mkdirSync(staging, { recursive: true });

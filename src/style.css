@@ -1,5 +1,8 @@
 html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; user-select: none; }
 #pet, svg { width: 100%; height: 100%; }
+#pet { position: relative; }
+.cat-layer { position: absolute; inset: 0; pointer-events: none; }
+[data-outgoing] [data-cat] { pointer-events: none !important; }
 [data-cat] { cursor: grab; }
 body.held [data-cat] { cursor: grabbing; }
 body.click-through [data-cat] { cursor: default; }

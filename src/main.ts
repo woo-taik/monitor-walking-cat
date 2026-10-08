@@ -1,10 +1,11 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, Tray, type Display, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, powerMonitor, screen, Tray, type Display, type MenuItemConstructorOptions } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { PetBrain } from './shared/brain.js';
 import { menuPoint } from './shared/placement.js';
+import { frameInterval } from './shared/cadence.js';
 import { defaults, loadSettings, saveSettings } from './settings.js';
 import type { PetState, Point, Settings } from './shared/types.js';
 import { runSmoke } from './smoke.js';
@@ -48,6 +49,7 @@ export class PetController {
   private hovered = false;
   private ignored = false;
   private dragging = false;
+  private pointerPressed = false;
   private grab = { x: 0, y: 0 };
   private menuOpen = false;
   private popup?: Menu;
@@ -57,6 +59,11 @@ export class PetController {
   private shortcutRecall = false;
   private disposed = false;
   private warnedSave = false;
+  private battery = false;
+  private readonly systemStops = new Set<string>();
+  private lastState = '';
+  private lastCursor = '';
+  private verificationStopped = false;
   private readonly settingsFile = path.join(app.getPath('userData'), 'settings.json');
   isMenuOpen() { return this.menuOpen; }
   isMouseIgnored() { return this.ignored; }
@@ -105,7 +112,11 @@ export class PetController {
       this.saveTimer = setInterval(() => this.save(), 15000);
     }
     this.lastTick = performance.now();
-    this.timer = setInterval(() => this.tick(), 33);
+    this.battery = powerMonitor.isOnBatteryPower();
+    powerMonitor.on('suspend', this.suspend); powerMonitor.on('resume', this.resume);
+    powerMonitor.on('lock-screen', this.lock); powerMonitor.on('unlock-screen', this.unlock);
+    powerMonitor.on('on-battery', this.onBattery); powerMonitor.on('on-ac', this.onAC);
+    this.scheduleTick();
     screen.on('display-added', this.refreshDisplays);
     screen.on('display-removed', this.refreshDisplays);
     screen.on('display-metrics-changed', this.refreshDisplays);
@@ -116,6 +127,8 @@ export class PetController {
     const trusted = (event: Electron.IpcMainEvent) => event.sender === this.window.webContents && event.senderFrame === this.window.webContents.mainFrame;
     ipcMain.on('pet:ready', event => { if (trusted(event)) this.sendState(); });
     ipcMain.on('pet:hover', (event, over) => { if (trusted(event) && typeof over === 'boolean') this.setHovered(over); });
+    ipcMain.on('pet:press', event => { if (trusted(event) && !this.settings.clickThrough) this.beginPress(); });
+    ipcMain.on('pet:pet', event => { if (trusted(event) && this.hovered && !this.settings.clickThrough) this.pet(); });
     ipcMain.on('pet:drag-start', event => { if (trusted(event) && !this.settings.clickThrough) this.beginDrag(screen.getCursorScreenPoint()); });
     ipcMain.on('pet:drag-end', event => { if (trusted(event)) this.endDrag(); });
     ipcMain.on('pet:menu', (event, point) => {
@@ -128,43 +141,83 @@ export class PetController {
 
   private tick() {
     if (this.disposed || this.window.isDestroyed()) return;
-    const now = performance.now(), delta = Math.min(.1, (now - this.lastTick) / 1000); this.lastTick = now;
-    if (this.hidden) return;
-    if (this.dragging) this.moveDrag(screen.getCursorScreenPoint());
-    else if (!this.paused && !this.menuOpen) {
+    const now = performance.now(), delta = Math.min(.25, (now - this.lastTick) / 1000); this.lastTick = now;
+    if (this.hidden || this.systemStops.size) return;
+    if (this.dragging) { this.moveDrag(screen.getCursorScreenPoint()); if (!this.paused) this.time += delta; }
+    else if (!this.paused && !this.menuOpen && !this.pointerPressed) {
       this.brain.tick(delta); this.time += delta; this.moveWindow();
     }
     this.sendState();
     const cursor = screen.getCursorScreenPoint(), bounds = this.window.getBounds();
-    this.window.webContents.send('pet:cursor', { x: cursor.x - bounds.x, y: cursor.y - bounds.y });
+    const local = { x: cursor.x - bounds.x, y: cursor.y - bounds.y };
+    if (this.settings.clickThrough || local.x < 0 || local.y < 0 || local.x >= bounds.width || local.y >= bounds.height) { local.x = -1; local.y = -1; }
+    const key = `${local.x},${local.y}`;
+    if (key !== this.lastCursor) { this.lastCursor = key; this.window.webContents.send('pet:cursor', local); }
   }
 
+  private scheduleTick() {
+    if (this.disposed || this.verificationStopped) return;
+    const frozen = !this.dragging && (this.paused || this.menuOpen || this.pointerPressed);
+    const pose = this.dragging || (this.brain.poseTime < .4 && !frozen) ? 'walking' : this.brain.pose;
+    this.timer = setTimeout(() => { this.tick(); this.scheduleTick(); }, frameInterval(pose, frozen, this.hidden || this.systemStops.size > 0, this.battery));
+  }
+  private restartTick() { if (this.timer) clearTimeout(this.timer); this.scheduleTick(); }
+  private systemStop(reason: string, stopped: boolean) {
+    if (stopped) { this.endDrag(); this.closeMenu(); this.save(); this.systemStops.add(reason); }
+    else { this.systemStops.delete(reason); if (!this.systemStops.size) this.refreshDisplays(); }
+    this.lastTick = performance.now(); this.sendState();
+    if (this.timer) clearTimeout(this.timer); this.scheduleTick();
+  }
+  private suspend = () => this.systemStop('suspend', true);
+  private resume = () => this.systemStop('suspend', false);
+  private lock = () => this.systemStop('lock', true);
+  private unlock = () => this.systemStop('lock', false);
+  private onBattery = () => { this.battery = true; };
+  private onAC = () => { this.battery = false; };
+
   state(): PetState { return { pose: this.brain.pose, facingRight: this.brain.facingRight, time: this.time, size: this.settings.size,
-    clickThrough: this.settings.clickThrough, frozen: this.paused || this.hidden || this.menuOpen }; }
-  sendState() { if (!this.window.isDestroyed()) this.window.webContents.send('pet:state', this.state()); }
+    clickThrough: this.settings.clickThrough, frozen: this.paused || this.hidden || this.menuOpen || (this.pointerPressed && !this.dragging) || this.systemStops.size > 0,
+    poseTime: this.brain.poseTime, gaitTime: this.brain.gaitTime, speed: this.brain.speed / (this.brain.width / 160) }; }
+  sendState() {
+    if (this.window.isDestroyed()) return;
+    const state = this.state(), key = JSON.stringify(state);
+    if (key !== this.lastState) { this.lastState = key; this.window.webContents.send('pet:state', state); }
+  }
   private moveWindow() {
     const rect = this.window.getBounds(), x = Math.round(this.brain.x), y = Math.round(this.brain.y);
     if (rect.x !== x || rect.y !== y) this.window.setPosition(x, y, false);
   }
   setHovered(value: boolean) { this.hovered = value; this.applyMousePolicy(); }
   private applyMousePolicy() {
-    const next = !this.dragging && (this.settings.clickThrough || !this.hovered);
+    const next = !this.dragging && !this.pointerPressed && (this.settings.clickThrough || !this.hovered);
     if (this.ignored !== next) { this.window.setIgnoreMouseEvents(next, { forward: true }); this.ignored = next; }
   }
-  setClickThrough(value: boolean) { this.settings.clickThrough = value; this.applyMousePolicy(); this.sendState(); this.refreshTray(); this.save(); }
+  setClickThrough(value: boolean) { this.endDrag(); this.settings.clickThrough = value; this.applyMousePolicy(); this.sendState(); this.refreshTray(); this.save(); }
+  beginPress() {
+    if (this.settings.clickThrough || this.menuOpen || this.hidden || this.systemStops.size || this.pointerPressed) return;
+    const bounds = this.window.getBounds(), cursor = screen.getCursorScreenPoint();
+    this.grab = { x: cursor.x - bounds.x, y: cursor.y - bounds.y }; this.pointerPressed = true;
+    this.applyMousePolicy(); this.sendState(); this.restartTick();
+  }
+  pet() {
+    if (this.dragging || this.pointerPressed || this.settings.clickThrough || this.menuOpen || this.paused || this.hidden || this.systemStops.size) return false;
+    const accepted = this.brain.pet(); if (accepted) { this.sendState(); this.refreshTray(); this.restartTick(); } return accepted;
+  }
   beginDrag(cursor: Point) {
-    if (this.dragging || this.settings.clickThrough || this.menuOpen) return;
+    if (this.dragging || this.settings.clickThrough || this.menuOpen || this.hidden || this.systemStops.size) return;
     const bounds = this.window.getBounds();
-    this.grab = { x: cursor.x - bounds.x, y: cursor.y - bounds.y }; this.dragging = true;
-    this.brain.hold(); this.applyMousePolicy(); this.sendState();
+    if (!this.pointerPressed) this.grab = { x: cursor.x - bounds.x, y: cursor.y - bounds.y };
+    this.dragging = true;
+    this.brain.hold(); this.applyMousePolicy(); this.sendState(); this.restartTick();
   }
   moveDrag(cursor: Point) { if (this.dragging) this.window.setPosition(Math.round(cursor.x - this.grab.x), Math.round(cursor.y - this.grab.y), false); }
   endDrag() {
-    if (!this.dragging) return;
+    this.pointerPressed = false;
+    if (!this.dragging) { this.applyMousePolicy(); this.sendState(); this.restartTick(); return; }
     this.dragging = false;
     const rect = this.window.getBounds();
     this.display = screen.getDisplayMatching(rect); this.brain.setBounds(this.display.workArea);
-    this.brain.pin(rect.x, rect.y); this.moveWindow(); this.applyMousePolicy(); this.sendState(); this.refreshTray(); this.save();
+    this.brain.pin(rect.x, rect.y); this.moveWindow(); this.applyMousePolicy(); this.sendState(); this.refreshTray(); this.save(); this.restartTick();
   }
   setRoaming(value: boolean) { this.brain.setRoaming(value); this.sendState(); this.refreshTray(); this.save(); }
   setSize(size: number) {
@@ -192,7 +245,7 @@ export class PetController {
   toggleHidden() {
     this.endDrag(); this.hidden = !this.hidden;
     if (this.hidden) this.window.hide(); else { this.window.showInactive(); this.sendState(); }
-    this.refreshTray();
+    this.refreshTray(); this.restartTick();
   }
   recall() {
     this.endDrag(); this.settings.clickThrough = false; this.paused = false; this.hidden = false;
@@ -219,7 +272,7 @@ export class PetController {
       const prefix = process.platform === 'darwin' ? '⌘+⌥' : 'Ctrl+Alt';
       void dialog.showMessageBox({ title: 'Animo 사용 방법', message: '끌어서 놓으면 그 자리에 머뭅니다.', detail:
         `고양이 또는 ${process.platform === 'darwin' ? '메뉴 막대' : '트레이'} 아이콘을 우클릭해 산책을 시작하세요.\n\n` +
-        `‘고양이도 클릭 통과’를 켜면 아이콘 메뉴에서 조작하세요.\n${prefix}+C: 숨기기 / 보이기${this.shortcutHide ? '' : ' (단축키 사용 불가)'}\n${prefix}+R: 고양이 찾기${this.shortcutRecall ? '' : ' (단축키 사용 불가)'}\n\n설정은 종료할 때와 15초마다 저장됩니다.` });
+        `짧게 클릭하거나 커서로 문지르면 쓰다듬습니다. 조금 끌면 배치할 수 있습니다.\n‘고양이도 클릭 통과’를 켜면 아이콘 메뉴에서 조작하세요.\n${prefix}+C: 숨기기 / 보이기${this.shortcutHide ? '' : ' (단축키 사용 불가)'}\n${prefix}+R: 고양이 찾기${this.shortcutRecall ? '' : ' (단축키 사용 불가)'}\n\n설정은 종료할 때와 15초마다 저장됩니다.` });
     } }, { id: 'quit', label: '종료', click: () => app.quit() });
     return Menu.buildFromTemplate(template);
   }
@@ -253,9 +306,12 @@ export class PetController {
   dispose() {
     if (this.disposed) return;
     this.save(); this.disposed = true;
-    if (this.timer) clearInterval(this.timer); if (this.saveTimer) clearInterval(this.saveTimer);
+    if (this.timer) clearTimeout(this.timer); if (this.saveTimer) clearInterval(this.saveTimer);
     globalShortcut.unregisterAll(); this.tray?.destroy();
     screen.removeListener('display-added', this.refreshDisplays); screen.removeListener('display-removed', this.refreshDisplays); screen.removeListener('display-metrics-changed', this.refreshDisplays);
+    powerMonitor.removeListener('suspend', this.suspend); powerMonitor.removeListener('resume', this.resume);
+    powerMonitor.removeListener('lock-screen', this.lock); powerMonitor.removeListener('unlock-screen', this.unlock);
+    powerMonitor.removeListener('on-battery', this.onBattery); powerMonitor.removeListener('on-ac', this.onAC);
   }
-  stopForVerification() { if (this.timer) clearInterval(this.timer); }
+  stopForVerification() { this.verificationStopped = true; if (this.timer) clearTimeout(this.timer); }
 }

@@ -1,4 +1,4 @@
-export type Pose = 'sitting' | 'walking' | 'sleeping' | 'held';
+export type Pose = 'sitting' | 'walking' | 'sleeping' | 'held' | 'stretching' | 'grooming' | 'petted';
 export interface Point { x: number; y: number }
 export interface Bounds extends Point { width: number; height: number }
 export interface PetState {
@@ -8,6 +8,9 @@ export interface PetState {
   size: number;
   clickThrough: boolean;
   frozen: boolean;
+  poseTime: number;
+  gaitTime: number;
+  speed: number;
 }
 export interface Settings {
   version: 2;
@@ -26,6 +29,8 @@ export interface PetAPI {
   onCursor(callback: (point: Point) => void): () => void;
   ready(): void;
   hover(overCat: boolean): void;
+  press(): void;
+  pet(): void;
   beginDrag(): void;
   endDrag(): void;
   openMenu(point: Point): void;

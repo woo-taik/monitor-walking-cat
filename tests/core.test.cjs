@@ -7,6 +7,8 @@ const { PetBrain, clampPosition } = require('../dist/node/shared/brain.js');
 const { legStep } = require('../dist/node/shared/gait.js');
 const { menuPoint } = require('../dist/node/shared/placement.js');
 const { validateSettings, loadSettings, saveSettings } = require('../dist/node/settings.js');
+const { PetGesture } = require('../dist/node/shared/gesture.js');
+const { frameInterval } = require('../dist/node/shared/cadence.js');
 function rng() { let seed = 42; return () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; }
 test('roaming stays within negative monitor work areas and visits all poses', () => {
   const brain = new PetBrain({ x: -1920, y: -1080, width: 1920, height: 1032 }, rng());
@@ -15,7 +17,62 @@ test('roaming stays within negative monitor work areas and visits all poses', ()
     brain.tick(i % 71 === 0 ? 20 : .033); poses.add(brain.pose);
     assert(brain.x >= -1920 && brain.x + brain.width <= 0 && brain.y >= -1080 && brain.y + brain.height <= -48);
   }
-  for (const pose of ['walking', 'sleeping', 'sitting']) assert(poses.has(pose));
+  for (const pose of ['walking', 'sleeping', 'sitting', 'stretching', 'grooming']) assert(poses.has(pose));
+});
+
+test('petting has a cooldown, preserves roaming and pinned coordinates, and cannot interrupt a held cat', () => {
+  const brain = new PetBrain({ x: 0, y: 0, width: 1920, height: 1080 }, rng());
+  brain.pin(500, 220);
+  assert(brain.pet()); assert.equal(brain.pose, 'petted'); assert(!brain.pet());
+  for (let i = 0; i < 61; i++) brain.tick(.1);
+  assert.equal(brain.x, 500); assert.equal(brain.y, 220); assert.equal(brain.roaming, false);
+  assert(brain.pet()); brain.hold(); assert(!brain.pet());
+  brain.setRoaming(true); for (let i = 0; i < 70; i++) brain.tick(.1);
+  assert(brain.pet()); assert.equal(brain.roaming, true);
+});
+
+test('walking accelerates smoothly, stops within bounds and ties gait progress to actual travel', () => {
+  const brain = new PetBrain({ x: -1000, y: 0, width: 1000, height: 500 }, () => .8);
+  brain.setRoaming(true);
+  while (brain.pose !== 'walking') brain.tick(.033);
+  let previousSpeed = 0, distance = 0, stopped = false;
+  for (let i = 0; i < 2000; i++) {
+    const previousX = brain.x, previousY = brain.y;
+    brain.tick(.033); distance += Math.hypot(brain.x - previousX, brain.y - previousY);
+    if (brain.pose !== 'walking') { stopped = true; break; }
+    assert(Math.abs(brain.speed - previousSpeed) <= 150 * .033 + 1e-6);
+    assert(brain.speed <= 52); previousSpeed = brain.speed;
+  }
+  assert(stopped); assert.equal(brain.speed, 0);
+  assert(Math.abs(brain.gaitTime * 52 - distance) < .21);
+});
+
+test('short clicks pet, threshold movement drags, and only deliberate repeated movement strokes', () => {
+  const gesture = new PetGesture();
+  gesture.begin({ x: 100, y: 100 });
+  assert.equal(gesture.move({ x: 104, y: 100 }, true, 0), undefined);
+  assert.equal(gesture.release(true), 'pet');
+  gesture.begin({ x: 100, y: 100 });
+  assert.equal(gesture.move({ x: 106, y: 100 }, true, 0), 'drag');
+  assert.equal(gesture.move({ x: 110, y: 100 }, false, 0), undefined);
+  assert.equal(gesture.release(false), 'drop');
+  gesture.begin({ x: 0, y: 0 }); gesture.cancel(); assert.equal(gesture.release(true), undefined);
+  for (let i = 0; i < 20; i++) assert.equal(gesture.move({ x: 100, y: 100 }, true, i * 100), undefined);
+  let strokes = 0;
+  for (let i = 0; i < 8; i++) if (gesture.move({ x: 100 + i % 2 * 12, y: 100 }, true, 2000 + i * 10) === 'stroke') strokes++;
+  assert.equal(strokes, 1);
+  gesture.move({ x: 0, y: 0 }, false, 3000);
+  assert.equal(gesture.move({ x: 100, y: 100 }, true, 4000), undefined);
+});
+
+test('inactive/frozen pets reduce updates and battery operation never raises the frame rate', () => {
+  for (const pose of ['walking', 'sleeping', 'sitting', 'held', 'stretching', 'grooming', 'petted']) {
+    assert(frameInterval(pose, true, false, false) >= 100);
+    assert(frameInterval(pose, false, true, false) >= 1000);
+    assert(frameInterval(pose, false, false, true) >= frameInterval(pose, false, false, false));
+  }
+  assert(frameInterval('walking', false, false, false) <= 34);
+  assert(frameInterval('sleeping', false, false, false) >= 200);
 });
 test('pinned position persists through animations; hold/drop/resume transitions work', () => {
   const brain = new PetBrain({ x: 0, y: 0, width: 1920, height: 1080 }, rng());

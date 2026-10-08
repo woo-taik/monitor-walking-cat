@@ -1,4 +1,4 @@
-import { screen } from 'electron';
+import { powerMonitor, screen } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -8,9 +8,19 @@ export async function runSmoke(controller: PetController, output: string) {
   fs.mkdirSync(output, { recursive: true });
   const lines: string[] = [];
   const win = controller.window;
-  controller.stopForVerification();
   try {
-    await wait(200);
+    controller.brain.pin(); controller.sendState();
+    await wait(500);
+    const idleBefore = await win.webContents.executeJavaScript('window.animoPreview.stats().updates');
+    await wait(1000);
+    const idleUpdates = await win.webContents.executeJavaScript('window.animoPreview.stats().updates') - idleBefore;
+    assert(idleUpdates > 0 && idleUpdates <= 12, 'Resting cat should update about 10 times/second');
+    controller.menu().getMenuItemById('pause')!.click(); await wait(100);
+    const pauseBefore = await win.webContents.executeJavaScript('window.animoPreview.stats().updates');
+    await wait(350);
+    assert.equal(await win.webContents.executeJavaScript('window.animoPreview.stats().updates'), pauseBefore);
+    controller.menu().getMenuItemById('pause')!.click(); controller.stopForVerification();
+    lines.push(`PASS: actual idle renderer updated ${idleUpdates} times in 1 second; paused renderer performed zero repeated updates.`);
     assert(win.isVisible()); assert(win.isAlwaysOnTop()); assert(!win.isFocusable());
     assert.equal(await win.webContents.executeJavaScript('typeof window.require'), 'undefined');
     assert.equal(await win.webContents.executeJavaScript('typeof window.process'), 'undefined');
@@ -28,9 +38,69 @@ export async function runSmoke(controller: PetController, output: string) {
     await wait(100); assert(controller.isMenuOpen()); controller.closeMenu(); await wait(100);
     assert(!controller.isMenuOpen());
     lines.push('PASS: sandboxed renderer IPC reaches drag/drop, hover and context-menu handlers.');
+    const pinned = win.getBounds();
+    controller.brain.pin(); controller.sendState();
+    await win.webContents.executeJavaScript("window.animoPreview.render({pose:'sitting',facingRight:true,time:1}); window.animo.hover(true)");
+    await wait(50);
+    win.webContents.sendInputEvent({ type: 'mouseDown', x: Math.round(pinned.width * 105 / 160), y: Math.round(pinned.height * 60 / 144), button: 'left', clickCount: 1 });
+    await wait(50); assert.equal(controller.brain.pose, 'sitting'); assert(controller.state().frozen);
+    win.webContents.sendInputEvent({ type: 'mouseUp', x: Math.round(pinned.width * 105 / 160), y: Math.round(pinned.height * 60 / 144), button: 'left', clickCount: 1 });
+    await wait(50); assert.equal(controller.brain.pose, 'petted'); assert(!controller.brain.roaming);
+    assert.deepEqual(win.getBounds(), pinned); assert(!controller.state().frozen);
+    await win.webContents.executeJavaScript('window.animo.hover(true); window.animo.pet()');
+    await wait(50); assert.equal(controller.brain.poseTime, 0, 'Cooldown should not restart petting');
+    lines.push('PASS: native short click pets without moving/pinning again; cooldown and pet IPC work.');
+    for (let i = 0; i < 61; i++) controller.brain.tick(.1);
+    controller.brain.pin(); controller.sendState();
+    await win.webContents.executeJavaScript("window.animoPreview.render({pose:'sitting',facingRight:true,time:1}); window.animo.hover(true)");
+    await wait(50);
+    win.webContents.sendInputEvent({ type: 'mouseDown', x: 105, y: 60, button: 'left', clickCount: 1 });
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: 115, y: 60, button: 'left', modifiers: ['leftbuttondown'] });
+    await wait(50); assert.equal(controller.brain.pose, 'held');
+    win.webContents.sendInputEvent({ type: 'mouseUp', x: 115, y: 60, button: 'left', clickCount: 1 });
+    await wait(50); assert.equal(controller.brain.pose, 'sitting');
+    lines.push('PASS: native pointer movement crosses drag threshold; drop remains pinned.');
+    await win.webContents.executeJavaScript(`(() => {
+      window.animoPreview.render({pose:'sitting',time:1,facingRight:true}); window.animo.hover(true);
+      for(let i=0;i<9;i++) document.dispatchEvent(new PointerEvent('pointermove',{clientX:105+i%2*12,clientY:60,screenX:100+i%2*12,screenY:100,buttons:0,bubbles:true}));
+    })()`);
+    await wait(50); assert.equal(controller.brain.pose, 'petted'); assert(!controller.brain.roaming);
+    lines.push('PASS: repeated unpressed pointer movement reaches petting through renderer gesture handling (synthetic events).');
     controller.setClickThrough(true); assert(controller.settings.clickThrough);
     controller.setClickThrough(false); assert(!controller.settings.clickThrough);
     lines.push('PASS: manual click-through policy toggles.');
+    const render = await win.webContents.executeJavaScript(`(() => {
+      const preview=window.animoPreview;
+      preview.render({pose:'walking',time:1,poseTime:0,gaitTime:0,speed:52,facingRight:true});
+      const svg=document.querySelector('#pet svg'), node=document.querySelector('[data-cat]'), before=preview.stats();
+      for(let i=1;i<=100;i++) preview.render({time:1+i*.033,poseTime:i*.033,gaitTime:i*.033},false);
+      const after=preview.stats();
+      preview.render({},false); preview.render({},false);
+      const reused=svg===document.querySelector('#pet svg') && node===document.querySelector('[data-cat]');
+      preview.render({pose:'grooming',time:5,poseTime:0},false);
+      const layersAtStart=document.querySelectorAll('.cat-layer').length;
+      preview.render({time:5.14,poseTime:.14},false);
+      const blend=Number(document.querySelector('.cat-layer:last-child').style.opacity);
+      preview.render({frozen:true},false);
+      const frozenBlend=Number(document.querySelector('.cat-layer:last-child').style.opacity);
+      preview.render({time:5.3,poseTime:.3,frozen:false},false);
+      const layersAtEnd=document.querySelectorAll('.cat-layer').length;
+      preview.render({facingRight:false,time:5.333},false);
+      const turning=document.querySelector('.cat-layer:last-child svg>g').getAttribute('transform');
+      return {reused,before,after,skipped:preview.stats().skipped,layersAtStart,blend,frozenBlend,layersAtEnd,turning};
+    })()`);
+    assert(render.reused); assert.equal(render.after.builds, render.before.builds);
+    assert.equal(render.after.updates - render.before.updates, 100);
+    assert(render.skipped >= 2); assert.equal(render.layersAtStart, 2); assert.equal(render.layersAtEnd, 1);
+    assert(Math.abs(render.blend - .5) < .01); assert.equal(render.frozenBlend, render.blend);
+    assert(!render.turning.includes('scale(-1 1)'), 'Direction should ease rather than flip instantly');
+    lines.push('PASS: 100 animation frames reuse SVG and input nodes; identical frames skipped; pose blend and turn eased.');
+    controller.sendState();
+    powerMonitor.emit('suspend'); powerMonitor.emit('lock-screen');
+    assert(controller.state().frozen);
+    powerMonitor.emit('resume'); assert(controller.state().frozen, 'Lock must remain after resume');
+    powerMonitor.emit('unlock-screen'); assert(!controller.state().frozen);
+    lines.push('PASS: suspend/lock reasons freeze independently; resume/unlock restores state and monitor bounds (simulated events).');
     for (const display of screen.getAllDisplays()) {
       controller.moveToDisplay(display);
       for (const size of [.75, 1, 1.35]) {
@@ -57,8 +127,8 @@ export async function runSmoke(controller: PetController, output: string) {
     controller.recall();
     assert.equal(controller.settings.clickThrough, false); assert.equal(controller.brain.roaming, false);
     lines.push('PASS: recall restores visibility and a controllable cat on the primary display.');
-    for (const pose of ['sitting', 'walking', 'sleeping', 'held']) {
-      await win.webContents.executeJavaScript(`window.animoPreview.render({pose:'${pose}',time:1.15,facingRight:true})`);
+    for (const pose of ['sitting', 'walking', 'sleeping', 'held', 'stretching', 'grooming', 'petted']) {
+      await win.webContents.executeJavaScript(`window.animoPreview.render({pose:'${pose}',time:1.15,poseTime:1.5,gaitTime:1.15,speed:52,facingRight:true,frozen:false})`);
       await wait(80);
       const image = await win.webContents.capturePage();
       assert(!image.isEmpty());
@@ -67,10 +137,10 @@ export async function runSmoke(controller: PetController, output: string) {
       assert.equal(pixel[((dimensions.height - 1) * dimensions.width + dimensions.width - 1) * 4 + 3], 0);
       fs.writeFileSync(path.join(output, `${pose}.png`), image.toPNG());
     }
-    await win.webContents.executeJavaScript("window.animoPreview.render({pose:'walking',time:.34,facingRight:false})");
+    await win.webContents.executeJavaScript("window.animoPreview.render({pose:'walking',time:.34,gaitTime:.34,speed:52,facingRight:false})");
     await wait(80);
     fs.writeFileSync(path.join(output, 'walking-left.png'), (await win.webContents.capturePage()).toPNG());
-    lines.push('PASS: 4 poses and mirrored walking rendered; transparent corners verified.');
+    lines.push('PASS: 7 poses and mirrored walking rendered; transparent corners verified.');
     lines.push(`INFO: platform=${process.platform}, Electron=${process.versions.electron}; macOS runtime verification still requires a Mac.`);
     fs.writeFileSync(path.join(output, 'electron-smoke.txt'), lines.join('\n'));
     console.log(lines.join('\n'));
