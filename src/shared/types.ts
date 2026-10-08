@@ -62,6 +62,7 @@ export interface PreferencesAPI {
 export interface PetAPI {
   onState(callback: (state: PetState) => void): () => void;
   onCursor(callback: (point: Point) => void): () => void;
+  onResetInput(callback: () => void): () => void;
   ready(): void;
   hover(overCat: boolean): void;
   press(): void;

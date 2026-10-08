@@ -8,6 +8,8 @@ let state: PetState = { pose: 'sitting', facingRight: true, time: 1, size: 1, cl
 const stats: Stats = { builds: 0, updates: 0, attributeWrites: 0, skipped: 0 };
 const gesture = new PetGesture();
 let hovered = false, pressed = false, cursor = { x: -1, y: -1 }, signature = '', facing = 1, transitionStart = 0;
+let capturedPointer: number | undefined;
+let lastUnpressedPoint: Point | undefined, awaitingCursor = false;
 type Layer = { element: HTMLDivElement; prefix: string; nodes: Map<string, Element>; attributes: CatFrame['attributes'] };
 let active: Layer | undefined, outgoing: Layer | undefined;
 function createLayer(next: PetState): Layer {
@@ -51,18 +53,32 @@ function hit(x: number, y: number) { const node = document.elementFromPoint(x, y
 function hover(point: Point) {
   cursor = point;
   const next = hit(point.x, point.y);
+  if (!next && !pressed) lastUnpressedPoint = undefined;
   if (next !== hovered) { hovered = next; window.animo?.hover(next); }
 }
 document.addEventListener('mousemove', e => hover({ x: e.clientX, y: e.clientY }));
 document.addEventListener('mouseleave', () => { hover({ x: -1, y: -1 }); if (!pressed) gesture.cancel(); });
+function beginPress(e: PointerEvent, origin: Point) {
+  // The window stops moving during the press, making local coordinates stable.
+  pressed = true; lastUnpressedPoint = undefined; gesture.begin(origin);
+  root.setPointerCapture(e.pointerId); capturedPointer = e.pointerId; window.animo?.press(); e.preventDefault();
+}
 document.addEventListener('pointerdown', e => {
   if (e.button !== 0 || state.clickThrough || !hit(e.clientX, e.clientY)) return;
-  // The window stops moving during the press, making local coordinates stable.
-  pressed = true; gesture.begin({ x: e.clientX, y: e.clientY });
-  root.setPointerCapture(e.pointerId); window.animo?.press(); e.preventDefault();
+  beginPress(e, { x: e.clientX, y: e.clientY });
 });
 document.addEventListener('pointermove', e => {
-  if (state.clickThrough || (e.buttons !== 0 && !pressed)) return;
+  if (state.clickThrough) return;
+  if (!pressed && e.buttons !== 0) {
+    // An inactive Windows overlay can miss the first down after showInactive,
+    // yet receive movement with the left button held. Recover only a press that
+    // started over the cat; never take a drag entering from another app.
+    if (!(e.buttons & 1) || !lastUnpressedPoint || !hit(lastUnpressedPoint.x, lastUnpressedPoint.y) || !hit(e.clientX, e.clientY)) {
+      lastUnpressedPoint = undefined; return;
+    }
+    beginPress(e, lastUnpressedPoint);
+  }
+  if (!pressed && e.buttons === 0) lastUnpressedPoint = hit(e.clientX, e.clientY) ? { x: e.clientX, y: e.clientY } : undefined;
   const point = pressed ? { x: e.clientX, y: e.clientY } : { x: e.screenX, y: e.screenY };
   const action = gesture.move(point, hit(e.clientX, e.clientY), performance.now());
   if (action === 'drag') window.animo?.beginDrag();
@@ -71,12 +87,19 @@ document.addEventListener('pointermove', e => {
 document.addEventListener('pointerup', e => {
   if (e.button !== 0 || !pressed) return;
   const action = gesture.release(hit(e.clientX, e.clientY)); pressed = false;
+  capturedPointer = undefined;
   if (root.hasPointerCapture(e.pointerId)) root.releasePointerCapture(e.pointerId);
+  lastUnpressedPoint = hit(e.clientX, e.clientY) ? { x: e.clientX, y: e.clientY } : undefined;
   window.animo?.endDrag(); if (action === 'pet') window.animo?.pet();
 });
-function cancel() { gesture.cancel(); if (pressed) { pressed = false; window.animo?.endDrag(); } }
+function cancel() {
+  const wasPressed = pressed, pointer = capturedPointer;
+  pressed = false; capturedPointer = undefined; lastUnpressedPoint = undefined; gesture.cancel();
+  if (pointer !== undefined && root.hasPointerCapture(pointer)) root.releasePointerCapture(pointer);
+  if (wasPressed) window.animo?.endDrag();
+}
 document.addEventListener('pointercancel', cancel);
-document.addEventListener('lostpointercapture', cancel);
+document.addEventListener('lostpointercapture', () => { if (pressed) cancel(); });
 window.addEventListener('blur', cancel);
 document.addEventListener('contextmenu', e => {
   e.preventDefault(); cancel();
@@ -88,5 +111,9 @@ if (new URLSearchParams(location.search).has('preview')) {
 }
 render(state);
 window.animo?.onState(render);
-window.animo?.onCursor(hover);
+window.animo?.onCursor(point => {
+  hover(point);
+  if (awaitingCursor) { awaitingCursor = false; lastUnpressedPoint = hit(point.x, point.y) ? point : undefined; }
+});
+window.animo?.onResetInput(() => { cancel(); hover({ x: -1, y: -1 }); awaitingCursor = true; });
 window.animo?.ready();

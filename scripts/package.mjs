@@ -6,12 +6,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const releaseDir = path.resolve(root, process.env.ANIMO_PACKAGE_OUT ?? 'release');
 const platform = process.argv[2] ?? process.platform;
 const arch = (process.argv[3] ?? process.arch).split(',');
 // Fail before Packager removes any files if an existing Windows package is open.
 if (platform === 'win32' && process.platform === 'win32') {
   for (const cpu of arch) {
-    const executable = path.join(root, 'release', `Animo-win32-${cpu}`, 'Animo.exe');
+    const executable = path.join(releaseDir, `Animo-win32-${cpu}`, 'Animo.exe');
     const check = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
       '$animoBusy = @(Get-Process Animo -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:ANIMO_PACKAGE_PATH }); if ($animoBusy.Count -gt 0) { exit 2 }'],
       { env: { ...process.env, ANIMO_PACKAGE_PATH: executable }, stdio: 'inherit' });
@@ -34,7 +35,7 @@ if (platform === 'darwin' && process.platform === 'win32') {
   await createPackage(staging, appAsar);
   for (const cpu of arch) {
     const zip = await downloadArtifact({ version: '44.7.0', platform: 'darwin', arch: cpu, artifactName: 'electron' });
-    const target = path.join(root, 'release', `Animo-darwin-${cpu}.zip`);
+    const target = path.join(releaseDir, `Animo-darwin-${cpu}.zip`);
     const result = spawnSync('python', [path.join(root, 'scripts', 'mac-archive.py'), zip, target, appAsar, path.join(root, 'assets', 'animo.icns'), manifest.version], { stdio: 'inherit' });
     if (result.status !== 0) throw new Error('Mac archive creation failed (Python 3 required on Windows).');
     console.log(target);
@@ -42,7 +43,7 @@ if (platform === 'darwin' && process.platform === 'win32') {
   process.exit(0);
 }
 const output = await packager({
-  dir: staging, out: path.join(root, 'release'), name: 'Animo', platform, arch,
+  dir: staging, out: releaseDir, name: 'Animo', platform, arch,
   overwrite: true, asar: true, prune: false, electronVersion: '44.7.0',
   icon: path.join(root, 'assets', platform === 'darwin' ? 'animo.icns' : 'animo.ico'),
   appBundleId: 'com.animo.desktopcat', appCategoryType: 'public.app-category.entertainment',

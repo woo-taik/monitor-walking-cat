@@ -41,6 +41,7 @@ Mac에서 직접 빌드하면 Electron Packager로 `release/Animo-darwin-arm64/A
 - **자리 배치:** 설정 창이나 메뉴의 `자리 배치`에서 왼쪽 아래·가운데 아래·오른쪽 아래를 선택합니다. 산책을 멈추고 해당 모니터의 작업 영역 안에 배치합니다.
 - **내가 저장한 자리:** 고양이를 원하는 위치에 놓고 설정 창에서 이름을 붙여 `현재 위치 저장`을 누릅니다. 최대 8개, 이름은 28자까지 저장하며 같은 이름은 중복 저장하지 않습니다. 저장한 자리는 클릭해서 불러오거나 삭제할 수 있습니다. 불러오면 산책을 멈추고, 숨겨진 고양이도 다시 표시합니다. 클릭 통과와 일시 정지 설정은 유지합니다.
 - **숨기기·멈추기·종료:** 메뉴에서 선택합니다. 숨기기와 일시 정지는 다음 실행까지 저장하지 않습니다.
+  숨김·다시 표시할 때 포인터 캡처와 hover를 초기화하므로 드래그를 다시 시작할 수 있습니다. Windows가 다시 표시된 창의 첫 버튼 누름을 전달하지 않는 경우에도 고양이 위에서 시작한 버튼 이동으로 드래그를 복구합니다.
 - **Mac 데스크톱:** `모든 데스크톱에서 표시`로 Spaces 표시 범위를 바꿉니다. 전체 화면 공간 위 표시도 요청하지만, 실기기 검증이 필요합니다.
 
 | 동작 | Windows | Mac |
@@ -94,6 +95,23 @@ Windows에서는 OS 마우스·키보드 입력으로 고양이 우클릭, 메�
 절전/잠금 복귀 검사는 합성 전원 이벤트를 사용합니다. 결과와 PNG는 `artifacts/electron-verification`에 저장됩니다.
 실제 마우스로 뒤쪽 앱에 클릭이 전달되는지, 물리적인 절전·복귀와 Mac Spaces/Retina 입력 동작은 수동 검증 항목입니다.
 
+## 자동 빌드·배포
+
+`.github/workflows/build-release.yml`은 PR, `master` 변경, 수동 실행에서 Windows x64·Mac Apple Silicon arm64·Mac Intel x64를 각각 빌드합니다. 각 환경에서 단위 테스트와 **패키지 실행·7개 자세 렌더링·설정 창 IPC**를 확인한 다음 ZIP과 SHA-256 체크섬을 Actions 실행의 `download-*` 아티팩트에 보관합니다. 검증 로그와 스크린샷은 `verification-*`에 있으며, 아티팩트 보관 기간은 7일입니다.
+
+CI 검증은 실제 마우스를 움직이지 않습니다. 물리적인 다중 모니터·Retina 입력·메뉴 바깥 클릭·Spaces 검증은 기존 `npm run verify`와 실기기 확인을 사용합니다. Mac CI 빌드는 로컬 테스트용 ad-hoc 서명을 적용하며 Developer ID 서명·Apple 공증을 포함하지 않습니다.
+
+릴리스하려면 `package.json`과 `package-lock.json`의 버전을 함께 갱신하고 해당 커밋에 같은 버전의 `v` 태그를 붙여 푸시합니다. 예를 들어 앱 버전이 `0.4.0`이면 다음 명령을 사용합니다.
+
+```sh
+git tag v0.4.0
+git push origin v0.4.0
+```
+
+태그와 앱·잠금 파일 버전이 다르면 빌드를 중단합니다. 세 플랫폼이 모두 통과하면 세 ZIP의 체크섬을 확인하고 GitHub Release와 `SHA256SUMS.txt`를 게시합니다. 파일 업로드가 실패하면 초안으로 남겨 재실행할 수 있으며 이미 게시된 Release는 덮어쓰지 않습니다. `-beta.1` 등의 버전은 prerelease로 게시합니다. 추가 비밀 키 없이 `GITHUB_TOKEN`을 사용하며, Release 작업에만 저장소 쓰기 권한을 부여합니다.
+
+로컬에서 패키지 실행만 확인하려면 `node scripts/verify-package.mjs`를 사용합니다. 실행 중인 배포 폴더를 건드리지 않고 검증하려면 `ANIMO_PACKAGE_OUT` 환경 변수로 다른 출력 폴더를 지정한 뒤 패키징·검증합니다.
+
 ## 코드
 
 - `src/main.ts`: 투명 창, 트레이/메뉴 막대, 입력, 모니터, 단축키
@@ -105,5 +123,7 @@ Windows에서는 OS 마우스·키보드 입력으로 고양이 우클릭, 메�
 - `src/shared/presets.ts`: 모니터별 상대 위치와 기본 자리 계산
 - `scripts/package.mjs`: 플랫폼 패키징
 - `scripts/mac-archive.py`: Windows에서 Mac 심볼릭 링크를 보존해 압축하는 보조 도구
+- `scripts/create-distribution.mjs`, `scripts/publish-release.mjs`: 다운로드 압축·체크섬 검사·Release 게시
+- `src/ci-smoke.ts`: 데스크톱 입력 없이 패키지 실행·렌더링·설정 IPC 검증
 
 기존 C# 소스와 `Animo.csproj`는 이전 Windows WPF 구현입니다. `Build-Wpf.ps1`로 별도 빌드할 수 있으며, 기본 실행과 배포는 Electron 버전을 사용합니다.
