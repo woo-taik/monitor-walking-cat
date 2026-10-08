@@ -7,17 +7,20 @@ import assert from 'node:assert/strict';
 import type { PetController } from './main.js';
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // OS input is necessary here: webContents.sendInputEvent never reaches the native menu.
-async function nativeInput(action: 'left' | 'right' | 'escape' | 'move', point = screen.getCursorScreenPoint()) {
+async function nativeInput(action: 'left' | 'right' | 'escape' | 'move' | 'left-down' | 'left-up', point = screen.getCursorScreenPoint()) {
   const physical = screen.dipToScreenPoint(point);
   const input = await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class AnimoMenuInput {
+  [StructLayout(LayoutKind.Sequential)] public struct Point { public int X; public int Y; }
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point point);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
   [DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
 }
@@ -31,13 +34,20 @@ if ($env:ANIMO_INPUT_ACTION -eq 'escape') {
   if (-not [AnimoMenuInput]::SetCursorPos([int]$env:ANIMO_INPUT_X, [int]$env:ANIMO_INPUT_Y)) { throw 'Cursor move failed' }
   if ($env:ANIMO_INPUT_ACTION -ne 'move') {
     Start-Sleep -Milliseconds 100
-    $down = if ($env:ANIMO_INPUT_ACTION -eq 'right') { 8 } else { 2 }
+    $down = if ($env:ANIMO_INPUT_ACTION -eq 'right') { 8 } elseif ($env:ANIMO_INPUT_ACTION -eq 'left-up') { 4 } else { 2 }
     [AnimoMenuInput]::mouse_event($down, 0, 0, 0, [UIntPtr]::Zero)
-    Start-Sleep -Milliseconds 50
-    [AnimoMenuInput]::mouse_event($down * 2, 0, 0, 0, [UIntPtr]::Zero)
+    if ($env:ANIMO_INPUT_ACTION -in @('left', 'right')) {
+      Start-Sleep -Milliseconds 50
+      [AnimoMenuInput]::mouse_event($down * 2, 0, 0, 0, [UIntPtr]::Zero)
+    }
   }
 }
-[AnimoMenuInput]::GetForegroundWindow().ToInt64()`], { windowsHide: true, timeout: 10000, env: { ...process.env, ANIMO_INPUT_ACTION: action, ANIMO_INPUT_X: String(physical.x), ANIMO_INPUT_Y: String(physical.y) } });
+$point = New-Object AnimoMenuInput+Point
+$point.X = [int]$env:ANIMO_INPUT_X; $point.Y = [int]$env:ANIMO_INPUT_Y
+$hit = [AnimoMenuInput]::WindowFromPoint($point)
+[uint32]$hitProcess = 0
+[void][AnimoMenuInput]::GetWindowThreadProcessId($hit, [ref]$hitProcess)
+Write-Output ('foreground=' + [AnimoMenuInput]::GetForegroundWindow().ToInt64() + ',hit=' + $hit.ToInt64() + ',hitProcess=' + $hitProcess)`], { windowsHide: true, timeout: 10000, env: { ...process.env, ANIMO_INPUT_ACTION: action, ANIMO_INPUT_X: String(physical.x), ANIMO_INPUT_Y: String(physical.y) } });
   if (action !== 'escape') {
     const actual = screen.getCursorScreenPoint();
     assert(Math.abs(actual.x - point.x) <= 1 && Math.abs(actual.y - point.y) <= 1, `OS input missed target: ${JSON.stringify({ action, point, physical, actual })}`);
@@ -75,8 +85,39 @@ async function verifyMenuDismissal(controller: PetController, lines: string[]) {
         assert(!controller.state().frozen, 'Menu dismissal must resume the cat');
       }
       lines.push(`PASS: ${display.label || display.id}: OS left/right clicks outside and Escape dismiss native menu; overlay focus and animation restored.`);
+      controller.resumeForVerification();
+      for (const interrupted of [false, true]) {
+        await controller.window.webContents.executeJavaScript(`window.menuInputTrace=[]; if(!window.menuInputTracing){window.menuInputTracing=true; for(const type of ['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture']) document.addEventListener(type,e=>{window.menuInputTrace.push({type,x:e.clientX,y:e.clientY,buttons:e.buttons}); if(window.menuInputTrace.length>30) window.menuInputTrace.shift();});}`);
+        controller.brain.pin(); controller.sendState();
+        const bounds = controller.window.getBounds(), point = { x: bounds.x + 105, y: bounds.y + 60 };
+        await controller.window.webContents.executeJavaScript("window.animoPreview.render({pose:'sitting',time:1})");
+        await nativeInput('move', point);
+        await until(() => !controller.isMouseIgnored(), 'Hover should enable cat input');
+        if (interrupted) {
+          await nativeInput('left-down', point);
+          await nativeInput('move', { x: point.x + 6, y: point.y });
+          await until(() => controller.brain.pose === 'held', 'Drag before hide did not start');
+        }
+        controller.toggleHidden(); await wait(50);
+        if (interrupted) await nativeInput('left-up', point);
+        controller.toggleHidden(); await wait(50);
+        await controller.window.webContents.executeJavaScript("window.animoPreview.render({pose:'sitting',time:1})");
+        const hit = await controller.window.webContents.executeJavaScript('window.animoPreview.hit(105,60)');
+        await until(() => !controller.isMouseIgnored(), `Show did not restore hover input: display=${display.id}, interrupted=${interrupted}, hit=${hit}, cursor=${JSON.stringify(screen.getCursorScreenPoint())}, bounds=${JSON.stringify(controller.window.getBounds())}`);
+        const down = await nativeInput('left-down', point);
+        const moved = { x: point.x + 12, y: point.y };
+        await nativeInput('move', moved);
+        const trace = await controller.window.webContents.executeJavaScript('JSON.stringify(window.menuInputTrace)');
+        await until(() => controller.brain.pose === 'held', `OS drag did not recover after hide/show: interrupted=${interrupted}, owner=${controller.window.getNativeWindowHandle().readBigUInt64LE()}, ownerProcess=${process.pid}, down=${down}, pose=${controller.brain.pose}, frozen=${controller.state().frozen}, ignored=${controller.isMouseIgnored()}, events=${trace}`);
+        await nativeInput('left-up', moved);
+        await until(() => controller.brain.pose === 'sitting' && !controller.state().frozen, 'Drop did not recover after hide/show');
+      }
+      controller.stopForVerification();
+      lines.push(`PASS: ${display.label || display.id}: OS drag/drop works after hide/show and interrupted press.`);
     }
   } finally {
+    controller.stopForVerification();
+    await nativeInput('left-up');
     controller.closeMenu(); target.destroy(); await nativeInput('move', cursor);
   }
 }
@@ -304,7 +345,7 @@ export async function runSmoke(controller: PetController, output: string) {
     await until(async () => await reopened.webContents.executeJavaScript(`document.querySelectorAll('[data-load]').length`) === 2, 'Saved positions disappeared on reopen');
     reopened.close(); await wait(50);
     lines.push('PASS: saved positions work from native menus and survive settings-window close/reopen; closing settings leaves the cat running.');
-    lines.push(`INFO: platform=${process.platform}, Electron=${process.versions.electron}; macOS runtime verification still requires a Mac.`);
+    lines.push(`INFO: platform=${process.platform}, Electron=${process.versions.electron}; macOS physical input/Spaces require manual verification; CI covers packaged runtime.`);
     fs.writeFileSync(path.join(output, 'electron-smoke.txt'), lines.join('\n'));
     console.log(lines.join('\n'));
   } catch (error) {

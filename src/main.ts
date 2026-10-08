@@ -11,8 +11,12 @@ import { anchorPosition, relativePosition, resolvePreset } from './shared/preset
 import { defaults, loadSettings, saveSettings } from './settings.js';
 import type { Anchor, PetState, Point, PreferencesSnapshot, Settings } from './shared/types.js';
 import { runSmoke } from './smoke.js';
+import { runCiSmoke } from './ci-smoke.js';
 
-const smoke = process.argv.includes('--smoke-test');
+const ciSmoke = process.argv.includes('--ci-smoke-test');
+const smoke = ciSmoke || process.argv.includes('--smoke-test');
+// Hosted Mac VMs may lack a usable GPU. Verify resources with software rendering.
+if (ciSmoke) app.disableHardwareAcceleration();
 const arg = (key: string) => { const i = process.argv.indexOf(key); return i >= 0 ? process.argv[i + 1] : undefined; };
 app.setName('Animo');
 if (smoke) {
@@ -30,7 +34,7 @@ else {
     controller = new PetController(smoke);
     await controller.start();
     if (smoke) {
-      try { await runSmoke(controller, path.resolve(arg('--output') ?? 'artifacts/electron-verification')); app.quit(); }
+      try { await (ciSmoke ? runCiSmoke : runSmoke)(controller, path.resolve(arg('--output') ?? 'artifacts/electron-verification')); app.quit(); }
       catch (error) { console.error(error); app.exit(1); }
     }
   }).catch(error => { console.error(error); app.exit(1); });
@@ -199,7 +203,7 @@ export class PetController {
   }
   private place(display: Display, point: Point) {
     this.endDrag(); this.display = display; this.brain.setBounds(display.workArea); this.brain.pin(point.x, point.y); this.moveWindow();
-    if (this.hidden) { this.hidden = false; this.window.showInactive(); }
+    if (this.hidden) this.showPet();
     this.sendState(); this.refreshTray(); this.save(); this.restartTick();
   }
   private placeAnchor(anchor: Anchor, display: Display) {
@@ -264,6 +268,9 @@ export class PetController {
       this.brain.tick(delta); this.time += delta; this.moveWindow();
     }
     this.sendState();
+    this.sendCursor();
+  }
+  private sendCursor() {
     const cursor = screen.getCursorScreenPoint(), bounds = this.window.getBounds();
     const local = { x: cursor.x - bounds.x, y: cursor.y - bounds.y };
     if (this.settings.clickThrough || local.x < 0 || local.y < 0 || local.x >= bounds.width || local.y >= bounds.height) { local.x = -1; local.y = -1; }
@@ -307,9 +314,9 @@ export class PetController {
       this.window.setBounds({ x, y, width: this.brain.width, height: this.brain.height }, false);
   }
   setHovered(value: boolean) { this.hovered = value; this.applyMousePolicy(); }
-  private applyMousePolicy() {
+  private applyMousePolicy(force = false) {
     const next = !this.menuOpen && !this.dragging && !this.pointerPressed && (this.settings.clickThrough || !this.hovered);
-    if (this.ignored !== next) { this.window.setIgnoreMouseEvents(next, { forward: true }); this.ignored = next; }
+    if (force || this.ignored !== next) { this.window.setIgnoreMouseEvents(next, { forward: true }); this.ignored = next; }
   }
   setClickThrough(value: boolean) { this.endDrag(); this.settings.clickThrough = value; this.applyMousePolicy(); this.sendState(); this.refreshTray(); this.save(); }
   beginPress() {
@@ -364,13 +371,23 @@ export class PetController {
     if (process.platform === 'darwin') this.window.setVisibleOnAllWorkspaces(this.settings.allWorkspaces, { visibleOnFullScreen: true, skipTransformProcessType: true });
   }
   toggleHidden() {
-    this.endDrag(); this.hidden = !this.hidden;
-    if (this.hidden) this.window.hide(); else { this.window.showInactive(); this.sendState(); }
+    this.closeMenu(); this.endDrag();
+    if (this.hidden) this.showPet();
+    else { this.hidden = true; this.window.hide(); this.resetPointerInput(); }
+    this.sendState();
     this.refreshTray(); this.restartTick();
   }
+  private resetPointerInput() {
+    this.window.webContents.send('pet:reset-input');
+    this.hovered = false; this.lastCursor = '';
+    // Reapply native input policy and hover position after a visibility transition.
+    this.applyMousePolicy(true);
+    if (!this.hidden) this.sendCursor();
+  }
+  private showPet() { this.hidden = false; this.window.showInactive(); this.resetPointerInput(); }
   recall() {
     this.endDrag(); this.settings.clickThrough = false; this.paused = false; this.hidden = false;
-    this.window.showInactive(); this.moveToDisplay(screen.getPrimaryDisplay()); this.brain.pin();
+    this.showPet(); this.moveToDisplay(screen.getPrimaryDisplay()); this.brain.pin();
     this.setHovered(false); this.sendState(); this.refreshTray(); this.save();
   }
   menu(): Menu {
@@ -455,4 +472,5 @@ export class PetController {
     powerMonitor.removeListener('on-battery', this.onBattery); powerMonitor.removeListener('on-ac', this.onAC);
   }
   stopForVerification() { this.verificationStopped = true; if (this.timer) clearTimeout(this.timer); }
+  resumeForVerification() { this.verificationStopped = false; this.lastTick = performance.now(); this.restartTick(); }
 }
