@@ -1,9 +1,90 @@
-import { powerMonitor, screen } from 'electron';
+import { BrowserWindow, powerMonitor, screen } from 'electron';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import type { PetController } from './main.js';
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// OS input is necessary here: webContents.sendInputEvent never reaches the native menu.
+async function nativeInput(action: 'left' | 'right' | 'escape' | 'move', point = screen.getCursorScreenPoint()) {
+  const physical = screen.dipToScreenPoint(point);
+  const input = await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class AnimoMenuInput {
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+}
+'@
+[void][AnimoMenuInput]::SetProcessDPIAware()
+[void][AnimoMenuInput]::SetThreadDpiAwarenessContext([IntPtr]::new(-4))
+if ($env:ANIMO_INPUT_ACTION -eq 'escape') {
+  [AnimoMenuInput]::keybd_event(27, 0, 0, [UIntPtr]::Zero)
+  [AnimoMenuInput]::keybd_event(27, 0, 2, [UIntPtr]::Zero)
+} else {
+  if (-not [AnimoMenuInput]::SetCursorPos([int]$env:ANIMO_INPUT_X, [int]$env:ANIMO_INPUT_Y)) { throw 'Cursor move failed' }
+  if ($env:ANIMO_INPUT_ACTION -ne 'move') {
+    Start-Sleep -Milliseconds 100
+    $down = if ($env:ANIMO_INPUT_ACTION -eq 'right') { 8 } else { 2 }
+    [AnimoMenuInput]::mouse_event($down, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 50
+    [AnimoMenuInput]::mouse_event($down * 2, 0, 0, 0, [UIntPtr]::Zero)
+  }
+}
+[AnimoMenuInput]::GetForegroundWindow().ToInt64()`], { windowsHide: true, timeout: 10000, env: { ...process.env, ANIMO_INPUT_ACTION: action, ANIMO_INPUT_X: String(physical.x), ANIMO_INPUT_Y: String(physical.y) } });
+  if (action !== 'escape') {
+    const actual = screen.getCursorScreenPoint();
+    assert(Math.abs(actual.x - point.x) <= 1 && Math.abs(actual.y - point.y) <= 1, `OS input missed target: ${JSON.stringify({ action, point, physical, actual })}`);
+  }
+  return input.stdout.trim();
+}
+async function verifyMenuDismissal(controller: PetController, lines: string[]) {
+  if (process.platform !== 'win32') return;
+  const cursor = screen.getCursorScreenPoint();
+  const target = new BrowserWindow({ width: 240, height: 140, frame: false, skipTaskbar: true, alwaysOnTop: true, show: false, title: 'Animo menu verification',
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  try {
+    await target.loadURL('data:text/html,<body style="background:linen">Animo menu dismissal verification</body>');
+    for (const display of screen.getAllDisplays()) {
+      controller.moveToDisplay(display); controller.brain.pin(); controller.sendState();
+      const area = display.workArea;
+      target.setBounds({ x: area.x + 30, y: area.y + 30, width: 240, height: 140 });
+      target.show(); if (!target.isVisible()) target.show(); target.focus(); await wait(100);
+      assert(target.isVisible());
+      const outside = { x: area.x + 80, y: area.y + 80 };
+      for (const action of ['left', 'right', 'escape'] as const) {
+        // A real user click gives this process foreground permission on Windows.
+        // Programmatic focus alone is subject to the OS foreground lock.
+        await nativeInput('left', outside); await wait(100);
+        const bounds = controller.window.getBounds();
+        if (action === 'left') {
+          await controller.window.webContents.executeJavaScript("window.animoPreview.render({pose:'sitting',facingRight:true,time:1}); window.animo.hover(true)");
+          await nativeInput('right', { x: bounds.x + 105, y: bounds.y + 60 });
+          await until(() => controller.isMenuOpen(), 'OS right click on cat did not open its native menu');
+        } else controller.showMenu({ x: bounds.x + 100, y: bounds.y + 60 });
+        await wait(100); assert(controller.isMenuOpen());
+        const foreground = await nativeInput(action, outside);
+        await until(() => !controller.isMenuOpen(), `Native menu stayed open after ${action} on display ${display.id}; foreground=${foreground}, owner=${controller.window.getNativeWindowHandle().readBigUInt64LE()}, target=${target.getNativeWindowHandle().readBigUInt64LE()}, ownerFocused=${controller.window.isFocused()}, targetFocused=${target.isFocused()}, bounds=${JSON.stringify(controller.window.getBounds())}`);
+        assert(!controller.window.isFocusable(), 'Overlay must return to non-focusable after dismiss');
+        assert(!controller.state().frozen, 'Menu dismissal must resume the cat');
+      }
+      lines.push(`PASS: ${display.label || display.id}: OS left/right clicks outside and Escape dismiss native menu; overlay focus and animation restored.`);
+    }
+  } finally {
+    controller.closeMenu(); target.destroy(); await nativeInput('move', cursor);
+  }
+}
+async function until(check: () => boolean | Promise<boolean>, message: string) {
+  const deadline = Date.now() + 2500;
+  while (Date.now() < deadline) { if (await check()) return; await wait(25); }
+  throw new Error(message);
+}
 export async function runSmoke(controller: PetController, output: string) {
   fs.mkdirSync(output, { recursive: true });
   const lines: string[] = [];
@@ -38,6 +119,7 @@ export async function runSmoke(controller: PetController, output: string) {
     await wait(100); assert(controller.isMenuOpen()); controller.closeMenu(); await wait(100);
     assert(!controller.isMenuOpen());
     lines.push('PASS: sandboxed renderer IPC reaches drag/drop, hover and context-menu handlers.');
+    await verifyMenuDismissal(controller, lines);
     const pinned = win.getBounds();
     controller.brain.pin(); controller.sendState();
     await win.webContents.executeJavaScript("window.animoPreview.render({pose:'sitting',facingRight:true,time:1}); window.animo.hover(true)");
@@ -112,6 +194,10 @@ export async function runSmoke(controller: PetController, output: string) {
       controller.setSize(1);
       const rect = win.getBounds();
       controller.beginDrag({ x: rect.x + 80, y: rect.y + 72 });
+      for (let step = 1; step <= 24; step++) {
+        controller.moveDrag({ x: rect.x + 80 + step, y: rect.y + 72 - Math.min(step, 20) });
+        assert(Math.abs(win.getBounds().width - 160) <= 1 && Math.abs(win.getBounds().height - 144) <= 1, 'Repeated movement changed logical size');
+      }
       controller.moveDrag({ x: rect.x + 110, y: rect.y + 52 }); controller.endDrag();
       const dropped = win.getBounds();
       assert.equal(dropped.x, rect.x + 30); assert.equal(dropped.y, rect.y - 20);
@@ -141,6 +227,83 @@ export async function runSmoke(controller: PetController, output: string) {
     await wait(80);
     fs.writeFileSync(path.join(output, 'walking-left.png'), (await win.webContents.capturePage()).toPNG());
     lines.push('PASS: 7 poses and mirrored walking rendered; transparent corners verified.');
+    const preferences = await controller.openPreferences();
+    await until(async () => await preferences.webContents.executeJavaScript('document.querySelectorAll("#display option").length') === screen.getAllDisplays().length, 'Preferences did not initialize');
+    assert(preferences.isVisible()); assert(preferences.isFocusable()); assert(!preferences.isAlwaysOnTop());
+    assert.equal((await controller.openPreferences()).id, preferences.id, 'Settings should reuse one window');
+    assert.equal(await preferences.webContents.executeJavaScript('typeof window.require'), 'undefined');
+    assert.equal(await preferences.webContents.executeJavaScript('typeof window.animo'), 'undefined');
+    assert.equal(await preferences.webContents.executeJavaScript('typeof window.preferences.change'), 'function');
+    const invalid = await preferences.webContents.executeJavaScript(`window.preferences.change({kind:'size',value:900}).then(()=>false,()=>true)`);
+    assert(invalid); assert.equal(controller.settings.size, 1);
+    await preferences.webContents.executeJavaScript('document.querySelector("input[name=size][value=\\"1.35\\"]").click()');
+    await until(() => controller.settings.size === 1.35, 'Size control did not apply');
+    assert(Math.abs(win.getBounds().width - 216) <= 1);
+    await preferences.webContents.executeJavaScript(`document.querySelector('#floor').value='desktop'; document.querySelector('#floor').dispatchEvent(new Event('change'))`);
+    await until(() => !controller.brain.floorOnly, 'Walk range did not apply');
+    await preferences.webContents.executeJavaScript(`document.querySelector('#click-through').click()`);
+    await until(() => controller.settings.clickThrough, 'Click-through did not apply'); assert(controller.isMouseIgnored());
+    await preferences.webContents.executeJavaScript(`document.querySelector('#click-through').click()`);
+    await until(() => !controller.settings.clickThrough, 'Settings could not recover click-through');
+    controller.menu().getMenuItemById('walk')!.click();
+    await until(async () => await preferences.webContents.executeJavaScript(`document.querySelector('#roaming').checked`), 'Tray changes did not reach settings');
+    await preferences.webContents.executeJavaScript(`document.querySelector('#roaming').click()`);
+    await until(() => !controller.brain.roaming, 'Roaming toggle did not apply');
+    lines.push('PASS: one focusable sandboxed settings window; size/range/click-through apply live; tray changes synchronize; invalid IPC rejected.');
+    for (const display of screen.getAllDisplays()) {
+      for (const anchor of ['bottom-left', 'bottom-center', 'bottom-right']) {
+        controller.changePreferences({ kind: 'anchor', anchor, displayId: String(display.id) });
+        await wait(60);
+        const actual = win.getBounds(), area = display.workArea, ratio = anchor === 'bottom-left' ? 0 : anchor === 'bottom-center' ? .5 : 1;
+        assert(Math.abs(actual.x - (area.x + (area.width - actual.width) * ratio)) <= 1, JSON.stringify({ anchor, actual, area, width: controller.brain.width, height: controller.brain.height }));
+        assert(Math.abs(actual.y + actual.height - area.y - area.height) <= 1); assert(!controller.brain.roaming);
+      }
+    }
+    const selected = screen.getAllDisplays().at(-1)!;
+    await preferences.webContents.executeJavaScript(`document.querySelector('#display').value=${JSON.stringify(String(selected.id))}; document.querySelector('#display').dispatchEvent(new Event('change'))`);
+    await until(() => controller.display.id === selected.id, 'Monitor selection did not apply');
+    await preferences.webContents.executeJavaScript(`document.querySelector('[data-anchor="bottom-right"]').click()`);
+    await until(() => Math.abs(win.getBounds().x + win.getBounds().width - selected.workArea.x - selected.workArea.width) <= 1, 'Anchor button did not apply');
+    await preferences.webContents.executeJavaScript(`document.querySelector('#preset-name').value='문서 옆'; document.querySelector('#save-form').requestSubmit()`);
+    await until(() => controller.settings.presets.length === 1, 'Save position form did not apply');
+    const saved = controller.settings.presets[0]; assert.equal(saved.relativeX, 1); assert.equal(saved.relativeY, 1);
+    await preferences.webContents.executeJavaScript(`document.querySelector('#preset-name').value='문서 옆'; document.querySelector('#save-form').requestSubmit()`);
+    await until(async () => await preferences.webContents.executeJavaScript(`document.querySelector('#status').classList.contains('error')`), 'Duplicate names should report an error');
+    assert.equal(controller.settings.presets.length, 1);
+    await preferences.webContents.executeJavaScript('document.querySelector("input[name=size][value=\\"0.75\\"]").click()');
+    await until(() => controller.settings.size === .75, 'Small size did not apply');
+    await preferences.webContents.executeJavaScript(`document.querySelector('[data-anchor="bottom-left"]').click()`);
+    await until(() => win.getBounds().x === selected.workArea.x, 'Left anchor did not apply');
+    await preferences.webContents.executeJavaScript(`document.querySelector('#hide').click()`);
+    await until(() => !win.isVisible(), 'Settings hide button did not apply');
+    await preferences.webContents.executeJavaScript(`document.querySelector('[data-load]').click()`);
+    await until(() => win.isVisible() && Math.abs(win.getBounds().x + 120 - selected.workArea.x - selected.workArea.width) <= 1, 'Saved position did not restore after resize/hide');
+    assert(!controller.brain.roaming); assert(Math.abs(win.getBounds().width - 120) <= 1);
+    await preferences.webContents.executeJavaScript(`document.querySelector('#pause').click()`);
+    await until(() => controller.preferencesSnapshot().paused, 'Pause button did not apply');
+    await preferences.webContents.executeJavaScript(`document.querySelector('#pause').click()`);
+    await until(() => !controller.preferencesSnapshot().paused, 'Resume button did not apply');
+    await preferences.webContents.executeJavaScript(`document.querySelector('[data-delete]').click()`);
+    await until(() => controller.settings.presets.length === 0, 'Delete position button did not apply');
+    lines.push('PASS: three anchors on every monitor; GUI saves/loads/deletes positions; resize and hide preserve restoration; duplicate names rejected.');
+    controller.changePreferences({ kind: 'size', value: 1 });
+    controller.changePreferences({ kind: 'anchor', anchor: 'bottom-right', displayId: String(selected.id) });
+    controller.changePreferences({ kind: 'save-position', name: '문서 옆' });
+    controller.changePreferences({ kind: 'anchor', anchor: 'bottom-center', displayId: String(selected.id) });
+    controller.changePreferences({ kind: 'save-position', name: '잠깐 쉬는 곳' });
+    await wait(100);
+    await preferences.webContents.executeJavaScript(`document.querySelector('#preset-name').value=''`);
+    await preferences.webContents.executeJavaScript(`document.querySelector('[data-load]').click()`);
+    await until(async () => (await preferences.webContents.executeJavaScript(`document.querySelector('#status').textContent`)).includes('저장한 자리에 배치'), 'Saved position status did not update');
+    fs.writeFileSync(path.join(output, 'preferences.png'), (await preferences.webContents.capturePage()).toPNG());
+    const firstId = controller.settings.presets[0].id;
+    controller.menu().getMenuItemById(`preset-${firstId}`)!.click();
+    assert(!controller.brain.roaming); assert(Math.abs(win.getBounds().x + 160 - selected.workArea.x - selected.workArea.width) <= 1);
+    preferences.close(); await wait(50); assert(!win.isDestroyed());
+    const reopened = await controller.openPreferences();
+    await until(async () => await reopened.webContents.executeJavaScript(`document.querySelectorAll('[data-load]').length`) === 2, 'Saved positions disappeared on reopen');
+    reopened.close(); await wait(50);
+    lines.push('PASS: saved positions work from native menus and survive settings-window close/reopen; closing settings leaves the cat running.');
     lines.push(`INFO: platform=${process.platform}, Electron=${process.versions.electron}; macOS runtime verification still requires a Mac.`);
     fs.writeFileSync(path.join(output, 'electron-smoke.txt'), lines.join('\n'));
     console.log(lines.join('\n'));

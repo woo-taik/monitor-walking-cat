@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'">
+  <title>Animo 설정</title>
+  <link rel="stylesheet" href="preferences.css">
+</head>
+<body>
+  <header><div><p class="eyebrow">ANIMO</p><h1>고양이의 자리</h1><p class="sub">내 작업 공간에 맞게, 편안하게.</p></div><span class="badge">설정</span></header>
+  <main>
+    <aside>
+      <div class="preview-stage"><div id="preview" aria-label="현재 설정의 고양이 미리보기"></div></div>
+      <h2 id="mode">고양이를 불러오는 중</h2><p id="summary" class="muted"></p>
+      <div class="actions"><button id="pause" type="button">잠시 멈추기</button><button id="hide" type="button">숨기기</button></div>
+      <p id="ghost-note" class="note" hidden>클릭 통과가 켜져 있어요. 이 창이나 트레이 메뉴에서 조작할 수 있습니다.</p>
+      <p class="tip">짧게 클릭하면 쓰다듬기.<br>끌어서 놓으면 그 자리에 쉬어요.</p>
+    </aside>
+    <div class="controls">
+      <section aria-labelledby="appearance"><h2 id="appearance">크기와 산책</h2>
+        <fieldset><legend>고양이 크기</legend><div class="sizes">
+          <label><input type="radio" name="size" value="0.75"><span>작게</span></label>
+          <label><input type="radio" name="size" value="1"><span>보통</span></label>
+          <label><input type="radio" name="size" value="1.35"><span>크게</span></label>
+        </div></fieldset>
+        <label class="toggle"><span><strong>산책하기</strong><small>끄면 지금 자리에서 쉬어요.</small></span><input id="roaming" type="checkbox"></label>
+        <label class="select-row" for="floor">산책 범위<select id="floor"><option value="floor">화면 아래쪽</option><option value="desktop">화면 전체</option></select></label>
+        <label class="toggle"><span><strong>고양이도 클릭 통과</strong><small>고양이 뒤의 프로그램을 클릭해요.</small></span><input id="click-through" type="checkbox"></label>
+        <label class="toggle" id="workspaces-row" hidden><span><strong>모든 데스크톱에 표시</strong><small>Mac의 다른 데스크톱에서도 함께해요.</small></span><input id="workspaces" type="checkbox"></label>
+      </section>
+      <section aria-labelledby="location"><h2 id="location">자리 배치</h2>
+        <label class="select-row" for="display">모니터<select id="display"></select></label>
+        <div class="anchors" aria-label="화면 아래쪽에 배치"><button type="button" data-anchor="bottom-left">왼쪽 아래</button><button type="button" data-anchor="bottom-center">가운데 아래</button><button type="button" data-anchor="bottom-right">오른쪽 아래</button></div>
+        <p class="hint">자리를 선택하면 산책을 멈추고 그곳에서 쉬어요.</p>
+      </section>
+      <section aria-labelledby="saved"><div class="section-title"><h2 id="saved">내가 저장한 자리</h2><span id="preset-count" class="muted">0 / 8</span></div>
+        <form id="save-form"><label for="preset-name" class="sr-only">저장할 자리 이름</label><input id="preset-name" type="text" maxlength="28" placeholder="자리 이름 · 예: 문서 옆" autocomplete="off" required><button id="save-position" type="submit">현재 위치 저장</button></form>
+        <p id="empty-presets" class="hint">고양이를 원하는 곳에 놓고 이름을 붙여 저장하세요.</p>
+        <ul id="presets" aria-label="저장한 자리"></ul>
+      </section>
+    </div>
+  </main>
+  <footer><p id="status" role="status" aria-live="polite">변경 사항은 바로 적용하고 자동으로 저장합니다.</p></footer>
+  <script type="module" src="preferences.js"></script>
+</body>
+</html>

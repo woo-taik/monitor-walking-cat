@@ -13,7 +13,7 @@ export interface PetState {
   speed: number;
 }
 export interface Settings {
-  version: 2;
+  version: 3;
   displayId: string;
   displayLabel: string;
   relativeX: number;
@@ -23,6 +23,41 @@ export interface Settings {
   floorOnly: boolean;
   clickThrough: boolean;
   allWorkspaces: boolean;
+  presets: PositionPreset[];
+}
+export interface PositionPreset {
+  id: string;
+  name: string;
+  displayId: string;
+  displayLabel: string;
+  relativeX: number;
+  relativeY: number;
+}
+export type Anchor = 'bottom-left' | 'bottom-center' | 'bottom-right';
+export interface PreferencesSnapshot {
+  size: number;
+  roaming: boolean;
+  floorOnly: boolean;
+  clickThrough: boolean;
+  allWorkspaces: boolean;
+  hidden: boolean;
+  paused: boolean;
+  platform: string;
+  displayId: string;
+  displays: { id: string; name: string }[];
+  presets: PositionPreset[];
+}
+export type PreferencesCommand =
+  | { kind: 'size'; value: number }
+  | { kind: 'roaming' | 'floor-only' | 'click-through' | 'all-workspaces' | 'hidden' | 'paused'; value: boolean }
+  | { kind: 'display'; id: string }
+  | { kind: 'anchor'; anchor: Anchor; displayId: string }
+  | { kind: 'save-position'; name: string }
+  | { kind: 'load-position' | 'delete-position'; id: string };
+export interface PreferencesAPI {
+  read(): Promise<PreferencesSnapshot>;
+  change(command: PreferencesCommand): Promise<{ snapshot: PreferencesSnapshot; notice?: string }>;
+  onChange(callback: (snapshot: PreferencesSnapshot) => void): () => void;
 }
 export interface PetAPI {
   onState(callback: (state: PetState) => void): () => void;

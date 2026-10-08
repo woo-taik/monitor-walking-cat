@@ -10,5 +10,5 @@
     "outDir": "dist/web",
     "types": []
   },
-  "include": ["src/renderer.ts", "src/cat.ts", "src/shared/**/*.ts"]
+  "include": ["src/renderer.ts", "src/preferences.ts", "src/cat.ts", "src/shared/**/*.ts"]
 }

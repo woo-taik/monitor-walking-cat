@@ -9,6 +9,7 @@ const { menuPoint } = require('../dist/node/shared/placement.js');
 const { validateSettings, loadSettings, saveSettings } = require('../dist/node/settings.js');
 const { PetGesture } = require('../dist/node/shared/gesture.js');
 const { frameInterval } = require('../dist/node/shared/cadence.js');
+const { anchorPosition, relativePosition, resolvePreset } = require('../dist/node/shared/presets.js');
 function rng() { let seed = 42; return () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }; }
 test('roaming stays within negative monitor work areas and visits all poses', () => {
   const brain = new PetBrain({ x: -1920, y: -1080, width: 1920, height: 1032 }, rng());
@@ -120,4 +121,36 @@ test('settings roundtrip, validation, corrupt-file fallback and WPF migration', 
     const migrated = loadSettings(file, legacy);
     assert.equal(migrated.displayLabel, '\\\\.\\DISPLAY2'); assert.equal(migrated.relativeX, .7); assert.equal(migrated.size, .75); assert.equal(migrated.roaming, false); assert.equal(migrated.clickThrough, true);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('saved positions roundtrip across sizes and monitor resolution changes; missing monitor falls back to primary', () => {
+  const area = { x: -1920, y: -1080, width: 1920, height: 1032 };
+  for (const [width, height] of [[120,108], [160,144], [216,194]]) {
+    for (const anchor of ['bottom-left', 'bottom-center', 'bottom-right']) {
+      const point = anchorPosition(anchor, area, width, height);
+      const p = { id: 'one', name: '문서 옆', displayId: 'secondary', displayLabel: 'Monitor', ...relativePosition(point, area, width, height) };
+      const same = resolvePreset(p, [{ id: 'secondary', workArea: area }], 'secondary', width, height);
+      assert.deepEqual(same.point, point); assert(!same.fallback);
+      const resized = { x: 0, y: 0, width: 2560, height: 1392 };
+      const restored = resolvePreset(p, [{ id: 'primary', workArea: resized }], 'primary', width, height);
+      assert(restored.fallback); assert.equal(restored.displayId, 'primary');
+      assert.deepEqual(restored.point, anchorPosition(anchor, resized, width, height));
+    }
+  }
+  const small = { x: -80, y: 0, width: 80, height: 60 };
+  assert.deepEqual(anchorPosition('bottom-right', small, 160, 144), { x: -80, y: 0 });
+});
+
+test('v2 settings migrate without losing options; presets validate, deduplicate, cap at eight and persist', () => {
+  const old = validateSettings({ version: 2, size: .75, roaming: false, clickThrough: true, relativeX: .7 });
+  assert.equal(old.version, 3); assert.equal(old.size, .75); assert(old.clickThrough); assert(!old.roaming); assert.deepEqual(old.presets, []);
+  const preset = { id: 'one', name: ' 문서 옆 ', displayId: 'secondary', displayLabel: 'Monitor', relativeX: -3, relativeY: 4 };
+  const checked = validateSettings({ ...old, presets: [null, { ...preset, relativeX: 'wrong' }, preset, preset,
+    { ...preset, id: 'two', name: '문서 옆' }, ...Array.from({ length: 10 }, (_, i) => ({ ...preset, id: `id-${i}`, name: `자리 ${i}` }))] });
+  assert.equal(checked.presets.length, 8); assert.equal(checked.presets[0].name, '문서 옆');
+  assert.equal(checked.presets[0].relativeX, 0); assert.equal(checked.presets[0].relativeY, 1);
+  assert.equal(new Set(checked.presets.map(p => p.id)).size, 8);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'animo-presets-'));
+  try { const file = path.join(directory, 'settings.json'); saveSettings(file, checked); assert.deepEqual(loadSettings(file), checked); }
+  finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

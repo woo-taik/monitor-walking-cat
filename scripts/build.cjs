@@ -7,5 +7,5 @@ for (const config of ['tsconfig.node.json', 'tsconfig.web.json']) {
   if (result.status !== 0) process.exit(result.status || 1);
 }
 fs.mkdirSync('dist/web', { recursive: true });
-for (const file of ['index.html', 'style.css']) fs.copyFileSync(`src/${file}`, `dist/web/${file}`);
+for (const file of ['index.html', 'style.css', 'preferences.html', 'preferences.css']) fs.copyFileSync(`src/${file}`, `dist/web/${file}`);
 fs.cpSync('assets', 'dist/assets', { recursive: true });
