@@ -11,7 +11,8 @@
     "test": "npm run build && node --test tests/*.test.cjs",
     "verify": "npm test && electron . --smoke-test",
     "package:win": "npm run build && node scripts/package.mjs win32 x64",
-    "package:mac": "npm run build && node scripts/package.mjs darwin arm64,x64"
+    "package:mac": "npm run build && node scripts/package.mjs darwin arm64,x64",
+    "installer": "node scripts/create-installer.mjs"
   },
   "devDependencies": {
     "@electron/asar": "4.3.1",

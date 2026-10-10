@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+# Installer runs as root. Link the installed app on the active user's desktop.
+console_user=$(/usr/bin/stat -f '%Su' /dev/console)
+case "$console_user" in
+  ''|root|loginwindow) exit 0 ;;
+esac
+
+home_line=$(/usr/bin/dscl . -read "/Users/$console_user" NFSHomeDirectory 2>/dev/null || true)
+home_dir=${home_line#NFSHomeDirectory: }
+if [ "$home_dir" = "$home_line" ] || [ ! -d "$home_dir/Desktop" ]; then
+  echo "Animo: could not find $console_user's Desktop; create an alias to /Applications/Animo.app manually." >&2
+  exit 0
+fi
+
+shortcut="$home_dir/Desktop/Animo.app"
+if [ -L "$shortcut" ] && [ "$(/bin/readlink "$shortcut")" = '/Applications/Animo.app' ]; then
+  exit 0
+fi
+if [ -e "$shortcut" ] || [ -L "$shortcut" ]; then
+  echo "Animo: $shortcut already exists; left it unchanged." >&2
+  exit 0
+fi
+
+if /bin/ln -s /Applications/Animo.app "$shortcut"; then
+  /usr/sbin/chown -h "$console_user" "$shortcut"
+else
+  echo "Animo: Desktop shortcut could not be created; use /Applications/Animo.app." >&2
+fi
+exit 0

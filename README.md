@@ -8,22 +8,26 @@ Electron + TypeScript + SVG를 사용하며 외부 서버나 AI API 없이 동�
 
 ## Windows 실행
 
-`Start-Animo.cmd` 또는 `release/Animo-win32-x64/Animo.exe`를 실행합니다.
+`Animo-<버전>-windows-x64.exe` 설치 파일을 실행하면 현재 사용자 계정에 설치하고 바탕화면과 시작 메뉴에 Animo 바로가기를 만듭니다. Windows의 설치된 앱에서 제거할 수 있습니다. 설정 파일은 제거하지 않습니다.
+현재 설치 파일에는 코드 서명이 없어 Windows SmartScreen 경고가 표시될 수 있습니다.
+설치 없이 사용하려면 `Start-Animo.cmd` 또는 `release/Animo-win32-x64/Animo.exe`를 실행합니다.
 배포 폴더에는 Electron 런타임이 포함되어 있어 Node.js와 .NET을 따로 설치할 필요가 없습니다.
 배포 패키지는 한국어·영어 실행 엔진 언어 파일만 포함해 용량을 줄입니다. 다른 언어의 OS에서는 기본 엔진 문구가 영어로 표시될 수 있으며 앱의 한국어 UI와 입력·글꼴 처리는 유지됩니다. Mac 패키지도 같은 정책을 사용합니다.
 다른 PC에는 `release/Animo-win32-x64` **폴더 전체**를 복사하세요.
 
 ## Mac 실행
 
-- **Apple Silicon (M1/M2/M3 등):** `release/Animo-darwin-arm64.zip`
-- **Intel Mac:** `release/Animo-darwin-x64.zip`
+- **Apple Silicon (M1/M2/M3 등):** `Animo-<버전>-macos-arm64.pkg`
+- **Intel Mac:** `Animo-<버전>-macos-x64.pkg`
 
-Windows에서 생성한 압축 파일을 Mac의 기본 압축 해제 도구로 풀고, `Animo.app`과 같은 폴더의 `Open-Animo.command`를 실행합니다.
+설치 파일을 열면 `/Applications/Animo.app`에 설치하고 현재 로그인한 사용자의 바탕화면에 `Animo.app` 바로가기를 만듭니다. 로그인한 사용자가 없는 상태에서 설치하거나 바탕화면 접근이 제한되면 `/Applications/Animo.app`에서 직접 실행할 수 있습니다. 앱 설정은 사용자 폴더에 저장됩니다.
+
+설치 없이 사용하려면 `release/Animo-darwin-arm64.zip` 또는 `release/Animo-darwin-x64.zip`을 Mac의 기본 압축 해제 도구로 풀고, `Animo.app`과 같은 폴더의 `Open-Animo.command`를 실행합니다.
 이 명령은 해당 앱에 로컬 테스트용 임시 서명을 적용하고 앱을 엽니다. 이후에는 `Animo.app`을 직접 실행할 수 있습니다.
 Node.js와 .NET 설치는 필요하지 않습니다.
 
-현재 Mac 압축 파일은 **실기기 미검증·미공증 개발 빌드**입니다. Windows 호스트에서 패키지 구조, 심볼릭 링크, 실행 권한, Info.plist와 앱 코드 포함 여부를 확인했습니다.
-macOS 보안 설정에서 사용자 승인이 필요할 수 있습니다. 일반 사용자에게 정식 배포하려면 Mac에서 Developer ID 서명과 Apple 공증을 진행해야 합니다.
+현재 Mac 설치 파일과 압축 파일은 **Developer ID 서명·Apple 공증이 없는 개발 빌드**입니다. 설치 파일과 앱을 여는 과정에서 macOS 보안 설정의 승인이 필요할 수 있습니다.
+일반 사용자에게 정식 배포하려면 Mac에서 Developer ID 서명과 Apple 공증을 진행해야 합니다.
 
 Mac에서 직접 빌드하면 Electron Packager로 `release/Animo-darwin-arm64/Animo.app`과 `release/Animo-darwin-x64/Animo.app`을 생성합니다.
 Mac CI에서 패키지 실행·7개 자세 렌더링·설정 IPC·합성 입력을 검증합니다. 실제 마우스 입력, Retina·다중 모니터, Spaces 동작은 실기기 확인이 필요합니다.
@@ -89,7 +93,10 @@ npm start
 npm run verify
 npm run package:win
 npm run package:mac
+npm run installer
 ```
+
+`npm run installer`는 현재 운영체제와 CPU용 패키지 폴더가 만들어진 뒤 실행합니다. Windows에서는 NSIS가 필요합니다. Mac에서 다른 CPU용 기존 패키지로 설치 파일을 만들려면 `node scripts/create-installer.mjs arm64` 또는 `x64`를 사용합니다.
 
 환경에서 npm 설치 스크립트를 차단했다면 `node node_modules/electron/install.js`로 Electron 런타임을 설치하세요.
 Windows에서는 `./Build.ps1 -Verify -Target both`로 검증과 두 플랫폼 패키지를 만들 수도 있습니다.
@@ -103,7 +110,7 @@ Windows에서는 OS 마우스·키보드 입력으로 고양이 우클릭, 메�
 
 ## 자동 빌드·배포
 
-`.github/workflows/build-release.yml`은 PR, `master` 변경, 수동 실행에서 Windows x64·Mac Apple Silicon arm64·Mac Intel x64를 각각 빌드합니다. 각 환경에서 단위 테스트와 **패키지 실행·7개 자세 렌더링·설정 창 IPC**를 확인한 다음 ZIP과 SHA-256 체크섬을 Actions 실행의 `download-*` 아티팩트에 보관합니다. 검증 로그와 스크린샷은 `verification-*`에 있으며, 아티팩트 보관 기간은 7일입니다.
+`.github/workflows/build-release.yml`은 PR, `master` 변경, 수동 실행에서 Windows x64·Mac Apple Silicon arm64·Mac Intel x64를 각각 빌드합니다. 각 환경에서 단위 테스트와 **패키지 실행·7개 자세 렌더링·설정 창 IPC**를 확인한 다음 ZIP·설치 파일과 SHA-256 체크섬을 Actions 실행의 `download-*` 아티팩트에 보관합니다. Windows CI는 설치·바탕화면 바로가기·제거도 확인합니다. 검증 로그와 스크린샷은 `verification-*`에 있으며, 아티팩트 보관 기간은 7일입니다.
 
 CI 검증은 소프트웨어 렌더링을 사용하고 합성 입력에 필요한 동안만 테스트 창에 포커스를 줍니다. 실제 마우스를 움직이지 않으며 정상 실행의 렌더링·포커스 정책은 유지합니다. 물리적인 다중 모니터·Retina 입력·메뉴 바깥 클릭·Spaces 검증은 기존 `npm run verify`와 실기기 확인을 사용합니다. Mac CI 빌드는 로컬 테스트용 ad-hoc 서명을 적용하며 Developer ID 서명·Apple 공증을 포함하지 않습니다.
 
@@ -114,7 +121,7 @@ git tag v0.4.0
 git push origin v0.4.0
 ```
 
-태그와 앱·잠금 파일 버전이 다르면 빌드를 중단합니다. 세 플랫폼이 모두 통과하면 세 ZIP의 체크섬을 확인하고 GitHub Release와 `SHA256SUMS.txt`를 게시합니다. 파일 업로드가 실패하면 초안으로 남겨 재실행할 수 있으며 이미 게시된 Release는 덮어쓰지 않습니다. `-beta.1` 등의 버전은 prerelease로 게시합니다. 추가 비밀 키 없이 `GITHUB_TOKEN`을 사용하며, Release 작업에만 저장소 쓰기 권한을 부여합니다.
+태그와 앱·잠금 파일 버전이 다르면 빌드를 중단합니다. 세 플랫폼이 모두 통과하면 세 ZIP과 세 설치 파일의 체크섬을 확인하고 GitHub Release와 `SHA256SUMS.txt`를 게시합니다. 파일 업로드가 실패하면 초안으로 남겨 재실행할 수 있으며 이미 게시된 Release는 덮어쓰지 않습니다. `-beta.1` 등의 버전은 prerelease로 게시합니다. 추가 비밀 키 없이 `GITHUB_TOKEN`을 사용하며, Release 작업에만 저장소 쓰기 권한을 부여합니다.
 
 로컬에서 패키지 실행만 확인하려면 `node scripts/verify-package.mjs`를 사용합니다. 실행 중인 배포 폴더를 건드리지 않고 검증하려면 `ANIMO_PACKAGE_OUT` 환경 변수로 다른 출력 폴더를 지정한 뒤 패키징·검증합니다.
 
@@ -130,6 +137,7 @@ git push origin v0.4.0
 - `scripts/package.mjs`: 플랫폼 패키징
 - `scripts/mac-archive.py`: Windows에서 Mac 심볼릭 링크를 보존해 압축하는 보조 도구
 - `scripts/create-distribution.mjs`, `scripts/publish-release.mjs`: 다운로드 압축·체크섬 검사·Release 게시
+- `scripts/create-installer.mjs`: Windows NSIS 설치 파일과 macOS pkg 생성
 - `src/ci-smoke.ts`: 데스크톱 입력 없이 패키지 실행·렌더링·설정 IPC 검증
 
 기존 C# 소스와 `Animo.csproj`는 이전 Windows WPF 구현입니다. `Build-Wpf.ps1`로 별도 빌드할 수 있으며, 기본 실행과 배포는 Electron 버전을 사용합니다.

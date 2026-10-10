@@ -16,8 +16,20 @@ export function archiveName(version, platform, arch) {
   if (!['win32:x64', 'darwin:arm64', 'darwin:x64'].includes(`${platform}:${arch}`)) throw new Error('Unsupported release target');
   return `Animo-${version}-${platform === 'win32' ? 'windows' : 'macos'}-${arch}.zip`;
 }
+export function installerName(version, platform, arch) {
+  if (!['win32:x64', 'darwin:arm64', 'darwin:x64'].includes(`${platform}:${arch}`)) throw new Error('Unsupported release target');
+  return `Animo-${version}-${platform === 'win32' ? 'windows' : 'macos'}-${arch}.${platform === 'win32' ? 'exe' : 'pkg'}`;
+}
 export function expectedArchives(version) {
   return [archiveName(version, 'win32', 'x64'), archiveName(version, 'darwin', 'arm64'), archiveName(version, 'darwin', 'x64')];
+}
+export function expectedDownloads(version) {
+  return [
+    ...expectedArchives(version),
+    installerName(version, 'win32', 'x64'),
+    installerName(version, 'darwin', 'arm64'),
+    installerName(version, 'darwin', 'x64')
+  ];
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const version = readVersion();
