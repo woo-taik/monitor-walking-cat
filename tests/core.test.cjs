@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { PetBrain, clampPosition } = require('../dist/node/shared/brain.js');
-const { legStep, pawReach, pawSwishFade, PAW_DURATION, PAW_STRIKE_TIME } = require('../dist/node/shared/gait.js');
+const { legStep, pawReach, pawSwishFade, PAW_DURATION, PAW_STRIKE_TIME, PAW_CONTACT_TIME } = require('../dist/node/shared/gait.js');
 const { menuPoint } = require('../dist/node/shared/placement.js');
 const { validateSettings, loadSettings, saveSettings } = require('../dist/node/settings.js');
 const { PetGesture } = require('../dist/node/shared/gesture.js');
@@ -194,6 +194,23 @@ test('the cat approaches the cursor from the side with room and shoves it away f
   assert.ok(edge.every(p => p.x <= 1438), 'a shove at the edge clamps instead of pushing the cursor off');
 });
 
+test('the cat turns toward the cursor after approaching from either side', () => {
+  const area = { x: 0, y: 0, width: 1440, height: 900 };
+  for (const startX of [40, 1200]) {
+    for (const cursor of [{ x: 900, y: 500 }, { x: 40, y: 500 }]) {
+      const brain = new PetBrain(area); brain.pin(startX, 500);
+      const target = approachTarget(cursor, area, brain.width, brain.height);
+      brain.approach(target.point.x, target.point.y);
+      for (let i = 0; i < 2000 && brain.pose === 'walking'; i++) brain.tick(.033);
+      assert.equal(brain.pose, 'sitting');
+      assert(inPushRange(pawPoint(brain, brain.width, brain.height, target.facingRight), cursor, 1));
+      assert(brain.paw(target.facingRight));
+      assert.equal(brain.facingRight, target.facingRight);
+      assert(inPushRange(pawPoint(brain, brain.width, brain.height, brain.facingRight), cursor, 1), 'the striking paw must face the cursor regardless of walking direction');
+    }
+  }
+});
+
 test('the errand allows enough time to actually cross the screen, at any cat size', () => {
   // The brain tops out at 52 DIP/s scaled by the cat's size, so a leg must be allowed at least that long.
   for (const scale of [0.75, 1, 1.35]) {
@@ -212,6 +229,8 @@ test('the paw swipe starts and ends on the seated foreleg, and strikes past the 
   assert.deepEqual(pawReach(-5), rest); assert.deepEqual(pawReach(PAW_DURATION + 5), rest, 'clamped outside the pose');
 
   const strike = pawReach(PAW_STRIKE_TIME);
+  assert(PAW_CONTACT_TIME < PAW_STRIKE_TIME);
+  assert(Math.abs(pawReach(PAW_CONTACT_TIME).x - .86 * 160) < 1, 'cursor movement starts when the paw crosses it, before maximum extension');
   // The cat stands so the cursor sits at 0.86 x 160 = 137.6 in its own view box.
   assert.ok(strike.x > 137.6, `the paw must reach through the cursor, got ${strike.x}`);
   assert.ok(strike.x > rest.x + 30 && strike.y < rest.y - 15, 'the strike is a long reach forward and up from sitting');

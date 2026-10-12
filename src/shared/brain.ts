@@ -30,8 +30,9 @@ export class PetBrain {
   private changePose(pose: Pose, duration: number) { this.pose = pose; this.poseTime = 0; this.remaining = duration; this.speed = 0; }
   private rest() { this.changePose('sitting', 3 + this.random() * 5); }
   /** One deliberate swipe at whatever is in front of the cat. */
-  paw() {
+  paw(facingRight = this.facingRight) {
     if (this.pose === 'held') return false;
+    this.facingRight = facingRight;
     this.changePose('pawing', PAW_DURATION); return true;
   }
   pet() {

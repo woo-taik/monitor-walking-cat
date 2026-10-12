@@ -9,8 +9,8 @@ import { menuPoint } from './shared/placement.js';
 import { frameInterval } from './shared/cadence.js';
 import { anchorPosition, relativePosition, resolvePreset } from './shared/presets.js';
 import { approachTarget, inPushRange, legTimeout, pawPoint, pushPath, wantsNudge } from './shared/keepawake.js';
-import { PAW_DURATION, PAW_STRIKE_TIME } from './shared/gait.js';
-import { cancelCursorPush, pushCursor } from './cursor.js';
+import { PAW_DURATION, PAW_CONTACT_TIME } from './shared/gait.js';
+import { cancelCursorPush, isCursorPushReady, prepareCursorPush, pushCursor } from './cursor.js';
 import { defaults, loadSettings, saveSettings } from './settings.js';
 import type { Anchor, PetState, Point, PreferencesSnapshot, Settings } from './shared/types.js';
 import { runSmoke } from './smoke.js';
@@ -303,6 +303,7 @@ export class PetController {
     if (this.nudge === 'idle') {
       if (!wantsNudge({ enabled: this.settings.keepAwake, busy, idleSeconds: powerMonitor.getSystemIdleTime(), sinceNudge: this.sinceNudge })) return;
       this.nudgeHome = { x: this.brain.x, y: this.brain.y };
+      void prepareCursorPush();
       this.beginNudgeLeg('approach', approachTarget(screen.getCursorScreenPoint(), this.display.workArea, this.brain.width, this.brain.height).point);
       return;
     }
@@ -311,22 +312,27 @@ export class PetController {
     const expired = this.nudgeElapsed > this.nudgeDeadline, home = this.nudgeHome!;
     if (this.nudge === 'paw') {
       // The cursor flies at the moment the paw reaches it, not when the cat arrives.
-      if (!this.struck && this.brain.poseTime >= PAW_STRIKE_TIME) { this.struck = true; this.shoveCursor(); }
+      if (!this.struck && this.brain.poseTime >= PAW_CONTACT_TIME) { this.struck = true; this.shoveCursor(); }
       if (this.brain.pose === 'pawing' && !expired) return;
       this.beginNudgeLeg('return', home);
       return;
     }
     if (this.brain.pose === 'walking' && !expired) return;
     if (this.nudge === 'approach') {
-      if (expired || !this.cursorInReach()) { this.beginNudgeLeg('return', home); return; }
+      // Walking direction is not the swipe direction: a cat arriving from the
+      // right must turn to the cursor before checking its front paw's reach.
+      const facingRight = approachTarget(screen.getCursorScreenPoint(), this.display.workArea, this.brain.width, this.brain.height).facingRight;
+      if (expired || !this.cursorInReach(facingRight)) { this.beginNudgeLeg('return', home); return; }
+      // Never start the swipe until the helper is waiting for its path.
+      if (!isCursorPushReady()) return;
       this.nudge = 'paw'; this.struck = false; this.nudgeElapsed = 0; this.nudgeDeadline = PAW_DURATION + 2;
-      this.brain.paw();
+      this.brain.paw(facingRight);
       return;
     }
     this.endNudge(true);
   }
-  private cursorInReach() {
-    return inPushRange(pawPoint(this.brain, this.brain.width, this.brain.height, this.brain.facingRight), screen.getCursorScreenPoint(), this.brain.width / 160);
+  private cursorInReach(facingRight = this.brain.facingRight) {
+    return inPushRange(pawPoint(this.brain, this.brain.width, this.brain.height, facingRight), screen.getCursorScreenPoint(), this.brain.width / 160);
   }
   private beginNudgeLeg(stage: 'approach' | 'return', point: Point) {
     this.nudge = stage; this.nudgeElapsed = 0;
@@ -341,10 +347,10 @@ export class PetController {
     pushCursor(process.platform === 'win32' ? path.map(point => screen.dipToScreenPoint(point)) : path);
   }
   private endNudge(settle: boolean) {
+    cancelCursorPush();
     if (this.nudge === 'idle') return;
     const home = this.nudgeHome;
     this.nudge = 'idle'; this.nudgeHome = undefined; this.nudgeElapsed = 0; this.sinceNudge = 0; this.struck = false;
-    cancelCursorPush();
     // A pinned cat re-pins on its own spot so the saved place survives the errand.
     // Hands off while the cat is being held: the user's grab wins.
     if (settle && home && !this.brain.roaming) { this.brain.pin(home.x, home.y); this.moveWindow(); }
@@ -365,7 +371,7 @@ export class PetController {
   }
   private restartTick() { if (this.timer) clearTimeout(this.timer); this.scheduleTick(); }
   private systemStop(reason: string, stopped: boolean) {
-    if (stopped) { this.endDrag(); this.closeMenu(); this.save(); this.systemStops.add(reason); }
+    if (stopped) { this.endNudge(false); this.endDrag(); this.closeMenu(); this.save(); this.systemStops.add(reason); }
     else { this.systemStops.delete(reason); if (!this.systemStops.size) this.refreshDisplays(); }
     this.lastTick = performance.now(); this.sendState();
     if (this.timer) clearTimeout(this.timer); this.scheduleTick();
@@ -452,7 +458,7 @@ export class PetController {
   toggleHidden() {
     this.closeMenu(); this.endDrag();
     if (this.hidden) this.showPet();
-    else { this.hidden = true; this.window.hide(); this.resetPointerInput(); }
+    else { this.endNudge(false); this.hidden = true; this.window.hide(); this.resetPointerInput(); }
     this.sendState();
     this.refreshTray(); this.restartTick();
   }

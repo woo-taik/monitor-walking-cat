@@ -2,6 +2,8 @@ import type { Pose } from './types.js';
 
 export const PAW_DURATION = 1.3;
 export const PAW_STRIKE_TIME = .58;
+// The paw crosses the cursor (x = .86 * 160) before its maximum extension.
+export const PAW_CONTACT_TIME = .53;
 // Front-paw keyframes in the cat's own 160x144 view box: sit, cock the paw back and
 // high, drive it through the cursor, follow through, then set it down again.
 const PAW_KEYS = [
