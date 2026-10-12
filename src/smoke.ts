@@ -86,6 +86,20 @@ async function verifyMenuDismissal(controller: PetController, lines: string[]) {
       }
       lines.push(`PASS: ${display.label || display.id}: OS left/right clicks outside and Escape dismiss native menu; overlay focus and animation restored.`);
       controller.resumeForVerification();
+      controller.brain.pin(); controller.sendState();
+      const hoverBounds = controller.window.getBounds();
+      const catPoint = { x: hoverBounds.x + 105, y: hoverBounds.y + 60 };
+      const cornerPoint = { x: hoverBounds.x + 2, y: hoverBounds.y + 2 };
+      for (const paused of [false, true]) {
+        controller.setPaused(paused);
+        for (const point of [catPoint, cornerPoint, catPoint, outside]) {
+          await nativeInput('move', point);
+          await until(() => controller.isMouseIgnored() === (point !== catPoint),
+            `OS hover failed to update input: paused=${paused}, point=${JSON.stringify(point)}`);
+        }
+      }
+      controller.setPaused(false);
+      lines.push(`PASS: ${display.label || display.id}: OS hover enables cat input and restores click-through in transparent corners and outside the window, including while paused.`);
       for (const interrupted of [false, true]) {
         await controller.window.webContents.executeJavaScript(`window.menuInputTrace=[]; if(!window.menuInputTracing){window.menuInputTracing=true; for(const type of ['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture']) document.addEventListener(type,e=>{window.menuInputTrace.push({type,x:e.clientX,y:e.clientY,buttons:e.buttons}); if(window.menuInputTrace.length>30) window.menuInputTrace.shift();});}`);
         controller.brain.pin(); controller.sendState();

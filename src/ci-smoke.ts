@@ -23,6 +23,19 @@ export async function runCiSmoke(controller: PetController, output: string) {
     assert.equal(await win.webContents.executeJavaScript('typeof window.require'), 'undefined');
     assert.equal(await win.webContents.executeJavaScript('typeof window.animo.beginDrag'), 'function');
     lines.push('PASS: packaged overlay starts with isolated preload and no keyboard focus.');
+    await focusForInput();
+    await win.webContents.executeJavaScript("window.animoPreview.render({pose:'sitting',time:1})");
+    for (const ignored of [false, true, false]) {
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: ignored ? 2 : 105, y: ignored ? 2 : 60 });
+      for (let tries = 0; tries < 100 && controller.isMouseIgnored() !== ignored; tries++) await wait(25);
+      assert.equal(controller.isMouseIgnored(), ignored, 'Renderer hover must follow the painted cat, not the transparent window bounds');
+    }
+    // Native leave events can be lost when the overlay starts ignoring input.
+    // The main process cursor update must still clear the renderer's hover.
+    win.webContents.send('pet:cursor', { x: -1, y: -1 });
+    for (let tries = 0; tries < 100 && !controller.isMouseIgnored(); tries++) await wait(25);
+    assert(controller.isMouseIgnored(), 'Cursor polling must restore click-through without a native mouseleave');
+    lines.push('PASS: renderer hover follows the painted cat; transparent corners and cursor updates outside the window restore click-through.');
     // Hide can interrupt a press before pointerup/cancel reaches the renderer.
     // A new drag must still start rather than retaining the previous gesture/capture.
     for (const interrupted of [false, true]) {
