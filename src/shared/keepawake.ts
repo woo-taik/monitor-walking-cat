@@ -19,15 +19,21 @@ export function wantsNudge(o: { enabled: boolean; busy: boolean; idleSeconds: nu
 }
 
 /**
- * Stand beside the cursor with the paws at its height, approaching from whichever side has room.
+ * Stand beside the cursor facing toward the screen's center. At an edge, use
+ * the reachable side so the cat stays on screen and can still touch the cursor.
  * The errand ignores `floorOnly`: a cat kept to the bottom strip could never reach a cursor further
  * up, and it walks back to its own spot as soon as the shove is done.
  */
-export function approachTarget(cursor: Point, bounds: Bounds, width: number, height: number) {
-  const facingRight = cursor.x - width >= bounds.x;
-  const x = cursor.x - width * (facingRight ? PAW_X : 1 - PAW_X);
-  return { point: clampPosition(x, cursor.y - height * PAW_Y, bounds, width, height), facingRight };
+export function approachTarget(cursor: Point, bounds: Bounds, width: number, height: number, screenBounds = bounds) {
+  const facingRight = pushesRight(cursor, screenBounds);
+  const target = (right: boolean) => ({ point: clampPosition(cursor.x - width * (right ? PAW_X : 1 - PAW_X), cursor.y - height * PAW_Y, bounds, width, height), facingRight: right });
+  const preferred = target(facingRight);
+  if (inPushRange(pawPoint(preferred.point, width, height, facingRight), cursor, width / 160)) return preferred;
+  const alternate = target(!facingRight);
+  return inPushRange(pawPoint(alternate.point, width, height, !facingRight), cursor, width / 160) ? alternate : preferred;
 }
+
+function pushesRight(cursor: Point, bounds: Bounds) { return cursor.x < bounds.x + bounds.width / 2; }
 
 /**
  * How long one leg of the errand may take before the cat gives up: twice the ideal
@@ -48,16 +54,15 @@ export function inPushRange(paw: Point, cursor: Point, scale: number) {
   return Math.hypot(cursor.x - paw.x, cursor.y - paw.y) <= 46 * scale;
 }
 
-/** Cursor positions for one shove: away from the paw, lifted slightly, easing out. */
-export function pushPath(paw: Point, cursor: Point, bounds: Bounds): Point[] {
-  const dx = cursor.x - paw.x, dy = cursor.y - paw.y, length = Math.hypot(dx, dy);
-  const ux = length > 1 ? dx / length : 1, uy = length > 1 ? dy / length : 0;
+/** Push toward the screen's center, with a small lift and an eased landing. */
+export function pushPath(cursor: Point, bounds: Bounds): Point[] {
+  const direction = pushesRight(cursor, bounds) ? 1 : -1;
   const path: Point[] = [];
   for (let i = 1; i <= PUSH_STEPS; i++) {
     const t = i / PUSH_STEPS, ease = 1 - (1 - t) * (1 - t);
     path.push({
-      x: clamp(cursor.x + ux * PUSH_DISTANCE * ease, bounds.x + 2, bounds.x + bounds.width - 2),
-      y: clamp(cursor.y + uy * PUSH_DISTANCE * ease - Math.sin(Math.PI * t) * PUSH_LIFT, bounds.y + 2, bounds.y + bounds.height - 2)
+      x: clamp(cursor.x + direction * PUSH_DISTANCE * ease, bounds.x + 2, bounds.x + bounds.width - 2),
+      y: clamp(cursor.y - Math.sin(Math.PI * t) * PUSH_LIFT, bounds.y + 2, bounds.y + bounds.height - 2)
     });
   }
   return path;

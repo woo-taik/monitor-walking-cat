@@ -304,7 +304,7 @@ export class PetController {
       if (!wantsNudge({ enabled: this.settings.keepAwake, busy, idleSeconds: powerMonitor.getSystemIdleTime(), sinceNudge: this.sinceNudge })) return;
       this.nudgeHome = { x: this.brain.x, y: this.brain.y };
       void prepareCursorPush();
-      this.beginNudgeLeg('approach', approachTarget(screen.getCursorScreenPoint(), this.display.workArea, this.brain.width, this.brain.height).point);
+      this.beginNudgeLeg('approach', approachTarget(screen.getCursorScreenPoint(), this.display.workArea, this.brain.width, this.brain.height, this.display.bounds).point);
       return;
     }
     this.nudgeElapsed += delta;
@@ -321,7 +321,7 @@ export class PetController {
     if (this.nudge === 'approach') {
       // Walking direction is not the swipe direction: a cat arriving from the
       // right must turn to the cursor before checking its front paw's reach.
-      const facingRight = approachTarget(screen.getCursorScreenPoint(), this.display.workArea, this.brain.width, this.brain.height).facingRight;
+      const facingRight = approachTarget(screen.getCursorScreenPoint(), this.display.workArea, this.brain.width, this.brain.height, this.display.bounds).facingRight;
       if (expired || !this.cursorInReach(facingRight)) { this.beginNudgeLeg('return', home); return; }
       // Never start the swipe until the helper is waiting for its path.
       if (!isCursorPushReady()) return;
@@ -343,7 +343,7 @@ export class PetController {
     const cursor = screen.getCursorScreenPoint();
     const paw = pawPoint(this.brain, this.brain.width, this.brain.height, this.brain.facingRight);
     if (!inPushRange(paw, cursor, this.brain.width / 160)) return;
-    const path = pushPath(paw, cursor, this.display.bounds);
+    const path = pushPath(cursor, this.display.bounds);
     pushCursor(process.platform === 'win32' ? path.map(point => screen.dipToScreenPoint(point)) : path);
   }
   private endNudge(settle: boolean) {

@@ -167,17 +167,21 @@ test('screen saver nudge waits for a real absence, keeps the cat off the user an
   assert.equal(validateSettings({ keepAwake: true }).keepAwake, true);
 });
 
-test('the cat approaches the cursor from the side with room and shoves it away from the paw, inside the screen', () => {
+test('the cat faces inward for a shove and stays within reach at screen edges', () => {
   const area = { x: 0, y: 0, width: 1440, height: 900 }, width = 160, height = 144;
   const right = approachTarget({ x: 900, y: 500 }, area, width, height);
-  assert.equal(right.facingRight, true, 'open space on the left means walking up from the left');
+  assert.equal(right.facingRight, false, 'right half means facing left toward the screen center');
   const paw = pawPoint(right.point, width, height, right.facingRight);
   assert.ok(Math.abs(paw.x - 900) < 1 && Math.abs(paw.y - 500) < 1, 'the front paw lands on the cursor');
   assert.equal(inPushRange(paw, { x: 900, y: 500 }, 1), true);
 
-  const left = approachTarget({ x: 40, y: 500 }, area, width, height);
-  assert.equal(left.facingRight, false, 'no room on the left, so approach from the right');
+  const left = approachTarget({ x: 300, y: 500 }, area, width, height);
+  assert.equal(left.facingRight, true, 'left half means facing right toward the screen center');
   assert.ok(left.point.x >= area.x, 'stays on screen');
+  for (const x of [40, 1400]) {
+    const edge = approachTarget({ x, y: 500 }, area, width, height);
+    assert(inPushRange(pawPoint(edge.point, width, height, edge.facingRight), { x, y: 500 }, 1), 'edge approach must still reach the cursor');
+  }
 
   const high = approachTarget({ x: 900, y: 120 }, area, width, height);
   assert.ok(inPushRange(pawPoint(high.point, width, height, high.facingRight), { x: 900, y: 120 }, 1),
@@ -186,12 +190,29 @@ test('the cat approaches the cursor from the side with room and shoves it away f
   assert.equal(inPushRange(pawPoint(offscreen.point, width, height, offscreen.facingRight), { x: 2600, y: 500 }, 1), false,
     'a cursor on another monitor is out of reach and the shove is skipped');
 
-  const path = pushPath({ x: 870, y: 500 }, { x: 900, y: 500 }, { x: 0, y: 0, width: 1440, height: 900 });
+  const path = pushPath({ x: 900, y: 500 }, area);
   assert.ok(path.length > 1);
-  assert.ok(path[path.length - 1].x > path[0].x && path[0].x > 900, 'the cursor is pushed away from the paw');
+  assert.ok(path[path.length - 1].x < path[0].x && path[0].x < 900, 'right-half cursor is pushed left');
   assert.ok(path.every(p => p.x >= 2 && p.x <= 1438 && p.y >= 2 && p.y <= 898), 'the cursor never leaves the screen');
-  const edge = pushPath({ x: 1400, y: 500 }, { x: 1435, y: 500 }, { x: 0, y: 0, width: 1440, height: 900 });
+  const edge = pushPath({ x: 1435, y: 500 }, area);
   assert.ok(edge.every(p => p.x <= 1438), 'a shove at the edge clamps instead of pushing the cursor off');
+});
+
+test('cursor shoves use each screen midpoint, including negative origins and the exact boundary', () => {
+  for (const area of [{ x: 0, y: 0, width: 1440, height: 900 }, { x: -1920, y: -1080, width: 1920, height: 1080 }]) {
+    const middle = area.x + area.width / 2, y = area.y + area.height / 2;
+    for (const [x, direction] of [[area.x + 2, 1], [middle - .01, 1], [middle, -1], [middle + .01, -1], [area.x + area.width - 2, -1]]) {
+      const path = pushPath({ x, y }, area);
+      assert(path.every(p => direction * (p.x - x) > 0), 'the whole shove follows the initial screen half');
+      assert.equal(path.at(-1).x, x + direction * 28);
+      assert.equal(path.at(-1).y, y, 'the lift returns to the original cursor height');
+      assert(path.every(p => p.x >= area.x + 2 && p.x <= area.x + area.width - 2));
+    }
+  }
+  const screen = { x: 0, y: 0, width: 1000, height: 900 };
+  const workArea = { x: 100, y: 0, width: 900, height: 900 };
+  assert.equal(approachTarget({ x: 520, y: 500 }, workArea, 160, 144, screen).facingRight, false,
+    'taskbar offsets must not change the screen midpoint used to choose the approach side');
 });
 
 test('the cat turns toward the cursor after approaching from either side', () => {
