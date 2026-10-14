@@ -1,8 +1,72 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { screen } from 'electron';
 import type { PetController } from './main.js';
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+function verifyMonitorVisits(controller: PetController, lines: string[]) {
+  const homeDisplay = screen.getPrimaryDisplay(), destinations = screen.getAllDisplays();
+  controller.setKeepAwake(true);
+  for (const target of destinations) for (const roaming of [false, true]) {
+    controller.changePreferences({ kind: 'anchor', anchor: 'bottom-center', displayId: String(homeDisplay.id) });
+    controller.setRoaming(roaming);
+    const home = { x: controller.brain.x, y: controller.brain.y };
+    const cursor = { x: target.workArea.x + target.workArea.width / 2, y: target.workArea.y + target.workArea.height / 2 };
+    let state = controller.startNudgeForVerification(cursor), visited = false;
+    const saved = state.savedPosition;
+    assert.equal(state.phase, 'approach');
+    for (let i = 0; i < 4000 && state.phase !== 'idle'; i++) {
+      state = controller.stepNudgeForVerification(.25, cursor);
+      assert.deepEqual(state.savedPosition, saved, 'a temporary monitor visit must never replace the saved home');
+      if (state.phase === 'paw') { assert.equal(state.displayId, target.id); visited = true; }
+    }
+    assert(visited, `Cat did not reach cursor display ${target.id}`);
+    assert.equal(state.phase, 'idle', 'Visit must return home and finish');
+    assert.equal(controller.display.id, homeDisplay.id);
+    assert(Math.abs(controller.brain.x - home.x) < 1 && Math.abs(controller.brain.y - home.y) < 1);
+    assert.equal(controller.brain.roaming, roaming);
+    const bounds = controller.window.getBounds();
+    assert(Math.abs(bounds.width - controller.brain.width) <= 1 && Math.abs(bounds.height - controller.brain.height) <= 1);
+  }
+  const target = destinations.at(-1)!;
+  const cursor = { x: target.workArea.x + target.workArea.width / 2, y: target.workArea.y + target.workArea.height / 2 };
+  if (destinations.length > 1) {
+    const first = destinations.find(d => d.id !== homeDisplay.id)!;
+    const firstCursor = { x: first.workArea.x + first.workArea.width / 2, y: first.workArea.y + first.workArea.height / 2 };
+    controller.changePreferences({ kind: 'anchor', anchor: 'bottom-center', displayId: String(homeDisplay.id) });
+    const initial = controller.startNudgeForVerification(firstCursor);
+    for (let i = 0; i < 5; i++) controller.stepNudgeForVerification(.25, firstCursor);
+    const redirected = destinations.find(d => d.id !== first.id)!;
+    const nextCursor = { x: redirected.workArea.x + redirected.workArea.width / 2, y: redirected.workArea.y + redirected.workArea.height / 2 };
+    let state = controller.stepNudgeForVerification(.25, nextCursor), visited = false;
+    for (let i = 0; i < 4000 && state.phase !== 'idle'; i++) {
+      state = controller.stepNudgeForVerification(.25, nextCursor);
+      assert.deepEqual(state.savedPosition, initial.savedPosition, 'retargeting must retain the original home');
+      if (state.phase === 'paw') { assert.equal(state.displayId, redirected.id); visited = true; }
+    }
+    assert(visited); assert.equal(state.phase, 'idle');
+  }
+  controller.startNudgeForVerification(cursor);
+  controller.beginDrag({ x: controller.window.getBounds().x + 105, y: controller.window.getBounds().y + 60 });
+  const drop = { x: homeDisplay.workArea.x + 200, y: homeDisplay.workArea.y + 200 };
+  controller.moveDrag({ x: drop.x + 105, y: drop.y + 60 }); controller.endDrag();
+  assert.equal(controller.stepNudgeForVerification(.25, cursor).phase, 'idle', 'Dragging must cancel all remaining route waypoints');
+  assert(Math.abs(controller.brain.x - drop.x) <= 1 && Math.abs(controller.brain.y - drop.y) <= 1);
+  assert(!controller.brain.roaming, 'a user drop must stay pinned after a cancelled visit');
+  controller.startNudgeForVerification(cursor);
+  controller.setPaused(true);
+  assert.equal(controller.stepNudgeForVerification(.25, cursor).phase, 'idle', 'Pause must discard the visit route');
+  controller.setPaused(false);
+  controller.startNudgeForVerification(cursor);
+  controller.moveToDisplay(homeDisplay);
+  assert.equal(controller.stepNudgeForVerification(.25, cursor).phase, 'idle', 'Explicit monitor selection must discard the visit route');
+  controller.startNudgeForVerification(cursor);
+  screen.emit('display-metrics-changed', {}, homeDisplay, ['workArea']);
+  assert.equal(controller.stepNudgeForVerification(.25, cursor).phase, 'idle', 'Layout changes must discard stale display routes');
+  controller.setKeepAwake(false); controller.setRoaming(false);
+  lines.push(`PASS: cursor visits and return home on ${destinations.length} connected display(s), pinned and roaming; cursor monitor changes retarget visits; saved home stays unchanged; drag, pause, monitor selection and layout changes cancel visits (simulated time, no cursor movement).`);
+}
 
 // CI checks the packaged runtime and resources without injecting desktop input.
 // Physical monitor, native menu dismissal and Spaces checks remain in --smoke-test/manual testing.
@@ -67,6 +131,7 @@ export async function runCiSmoke(controller: PetController, output: string) {
     await wait(50); assert(!controller.state().frozen);
     lines.push('PASS: swallowed first mouse-down recovers dragging; incoming drags from another app are ignored.');
     win.setFocusable(false); assert(!win.isFocusable());
+    verifyMonitorVisits(controller, lines);
     for (const pose of ['sitting', 'walking', 'sleeping', 'held', 'stretching', 'grooming', 'petted', 'pawing']) {
       await win.webContents.executeJavaScript(`window.animoPreview.render({pose:'${pose}',time:1.15,poseTime:1.5,gaitTime:1.15,speed:52,facingRight:true,frozen:false})`);
       await wait(80);

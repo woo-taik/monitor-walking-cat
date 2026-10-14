@@ -7,8 +7,9 @@ import { randomUUID } from 'node:crypto';
 import { PetBrain } from './shared/brain.js';
 import { menuPoint } from './shared/placement.js';
 import { frameInterval } from './shared/cadence.js';
+import { desktopBounds, monitorRoute, type TravelWaypoint } from './shared/monitor-route.js';
 import { anchorPosition, relativePosition, resolvePreset } from './shared/presets.js';
-import { approachTarget, inPushRange, legTimeout, pawPoint, pushPath, wantsNudge } from './shared/keepawake.js';
+import { approachTarget, inPushRange, legTimeout, pawPoint, pushPath, wantsNudge, NUDGE_IDLE_SECONDS, NUDGE_INTERVAL_SECONDS } from './shared/keepawake.js';
 import { PAW_DURATION, PAW_CONTACT_TIME } from './shared/gait.js';
 import { cancelCursorPush, isCursorPushReady, prepareCursorPush, pushCursor } from './cursor.js';
 import { defaults, loadSettings, saveSettings } from './settings.js';
@@ -79,7 +80,10 @@ export class PetController {
   private blocker?: number;
   private nudge: 'idle' | 'approach' | 'paw' | 'return' = 'idle';
   private struck = false;
-  private nudgeHome?: Point;
+  private nudgeHome?: { point: Point; display: Display };
+  private nudgeRoute: TravelWaypoint[] = [];
+  private nudgeWaypoint?: TravelWaypoint;
+  private nudgeDestination?: Display;
   private nudgeElapsed = 0;
   private nudgeDeadline = 0;
   private sinceNudge = 0;
@@ -213,6 +217,7 @@ export class PetController {
     return display;
   }
   private place(display: Display, point: Point) {
+    this.endNudge(false);
     this.endDrag(); this.display = display; this.brain.setBounds(display.workArea); this.brain.pin(point.x, point.y); this.moveWindow();
     if (this.hidden) this.showPet();
     this.sendState(); this.refreshTray(); this.save(); this.restartTick();
@@ -225,7 +230,7 @@ export class PetController {
     if (!clean || clean.length > 28) throw new Error('자리 이름을 1~28자로 입력해 주세요.');
     if (this.settings.presets.length >= 8) throw new Error('자리는 최대 8개까지 저장할 수 있습니다.');
     if (this.settings.presets.some(p => p.name === clean)) throw new Error('같은 이름의 자리가 있습니다. 다른 이름을 입력해 주세요.');
-    this.endDrag();
+    this.endNudge(false); this.endDrag();
     const bounds = this.window.getBounds(), display = screen.getDisplayMatching(bounds);
     this.settings.presets = [...this.settings.presets, { id: randomUUID(), name: clean, displayId: String(display.id), displayLabel: display.label,
       ...relativePosition(bounds, display.workArea, this.brain.width, this.brain.height) }];
@@ -297,52 +302,80 @@ export class PetController {
   }
   isKeepingAwake() { return this.blocker !== undefined && powerSaveBlocker.isStarted(this.blocker); }
   /** Walk to the cursor, swipe at it, then go back to the spot the cat was keeping. */
-  private updateKeepAwake(delta: number) {
+  private updateKeepAwake(delta: number, cursor = screen.getCursorScreenPoint(), idleSeconds = powerMonitor.getSystemIdleTime()) {
     const busy = this.dragging || this.paused || this.menuOpen || this.pointerPressed || this.hidden || this.systemStops.size > 0;
     this.sinceNudge += delta;
     if (this.nudge === 'idle') {
-      if (!wantsNudge({ enabled: this.settings.keepAwake, busy, idleSeconds: powerMonitor.getSystemIdleTime(), sinceNudge: this.sinceNudge })) return;
-      this.nudgeHome = { x: this.brain.x, y: this.brain.y };
-      void prepareCursorPush();
-      this.beginNudgeLeg('approach', approachTarget(screen.getCursorScreenPoint(), this.display.workArea, this.brain.width, this.brain.height, this.display.bounds).point);
+      if (!wantsNudge({ enabled: this.settings.keepAwake, busy, idleSeconds, sinceNudge: this.sinceNudge })) return;
+      this.display = screen.getDisplayMatching(this.window.getBounds());
+      this.nudgeHome = { point: { x: this.brain.x, y: this.brain.y }, display: this.display };
+      if (!this.testing) void prepareCursorPush();
+      this.approachCursor(cursor);
       return;
     }
     this.nudgeElapsed += delta;
     if (busy || !this.settings.keepAwake) { this.endNudge(false); return; }
-    const expired = this.nudgeElapsed > this.nudgeDeadline, home = this.nudgeHome!;
+    const expired = this.nudgeElapsed > this.nudgeDeadline;
+    if (this.nudge === 'approach' && screen.getDisplayNearestPoint(cursor).id !== this.nudgeDestination?.id) { this.approachCursor(cursor); return; }
     if (this.nudge === 'paw') {
       // The cursor flies at the moment the paw reaches it, not when the cat arrives.
-      if (!this.struck && this.brain.poseTime >= PAW_CONTACT_TIME) { this.struck = true; this.shoveCursor(); }
+      if (!this.struck && this.brain.poseTime >= PAW_CONTACT_TIME) { this.struck = true; this.shoveCursor(cursor); }
       if (this.brain.pose === 'pawing' && !expired) return;
-      this.beginNudgeLeg('return', home);
+      this.returnFromNudge();
       return;
     }
     if (this.brain.pose === 'walking' && !expired) return;
+    if (expired) { if (this.nudge === 'approach') this.returnFromNudge(); else this.endNudge(false); return; }
+    if (this.nudgeWaypoint) {
+      this.display = screen.getAllDisplays().find(d => d.id === this.nudgeWaypoint!.displayId) ?? screen.getDisplayMatching(this.window.getBounds());
+      this.nudgeWaypoint = undefined; this.refreshTray();
+    }
+    if (this.nextNudgeWaypoint()) return;
     if (this.nudge === 'approach') {
       // Walking direction is not the swipe direction: a cat arriving from the
       // right must turn to the cursor before checking its front paw's reach.
-      const facingRight = approachTarget(screen.getCursorScreenPoint(), this.display.workArea, this.brain.width, this.brain.height, this.display.bounds).facingRight;
-      if (expired || !this.cursorInReach(facingRight)) { this.beginNudgeLeg('return', home); return; }
+      const facingRight = approachTarget(cursor, this.display.workArea, this.brain.width, this.brain.height, this.display.bounds).facingRight;
+      if (!this.cursorInReach(facingRight, cursor)) { this.returnFromNudge(); return; }
       // Never start the swipe until the helper is waiting for its path.
-      if (!isCursorPushReady()) return;
+      if (!this.testing && !isCursorPushReady()) return;
       this.nudge = 'paw'; this.struck = false; this.nudgeElapsed = 0; this.nudgeDeadline = PAW_DURATION + 2;
       this.brain.paw(facingRight);
       return;
     }
     this.endNudge(true);
   }
-  private cursorInReach(facingRight = this.brain.facingRight) {
-    return inPushRange(pawPoint(this.brain, this.brain.width, this.brain.height, facingRight), screen.getCursorScreenPoint(), this.brain.width / 160);
+  private cursorInReach(facingRight = this.brain.facingRight, cursor = screen.getCursorScreenPoint()) {
+    return screen.getDisplayNearestPoint(cursor).id === this.display.id
+      && inPushRange(pawPoint(this.brain, this.brain.width, this.brain.height, facingRight), cursor, this.brain.width / 160);
   }
-  private beginNudgeLeg(stage: 'approach' | 'return', point: Point) {
-    this.nudge = stage; this.nudgeElapsed = 0;
-    this.nudgeDeadline = legTimeout(this.brain, point, this.brain.width / 160);
-    this.brain.approach(point.x, point.y);
+  private approachCursor(cursor: Point) {
+    const target = screen.getDisplayNearestPoint(cursor);
+    this.beginNudgeLeg('approach', approachTarget(cursor, target.workArea, this.brain.width, this.brain.height, target.bounds).point, target);
   }
-  private shoveCursor() {
-    const cursor = screen.getCursorScreenPoint();
-    const paw = pawPoint(this.brain, this.brain.width, this.brain.height, this.brain.facingRight);
-    if (!inPushRange(paw, cursor, this.brain.width / 160)) return;
+  private returnFromNudge() {
+    const home = this.nudgeHome!;
+    const target = screen.getAllDisplays().find(d => d.id === home.display.id);
+    if (!target) { this.endNudge(false); return; }
+    this.beginNudgeLeg('return', home.point, target);
+  }
+  private beginNudgeLeg(stage: 'approach' | 'return', point: Point, target: Display) {
+    const displays = screen.getAllDisplays(), source = screen.getDisplayMatching(this.window.getBounds());
+    this.nudge = stage; this.nudgeDestination = target;
+    this.nudgeRoute = monitorRoute(displays, source.id, target.id, this.brain, point, this.brain.width, this.brain.height);
+    this.brain.setBounds(desktopBounds(displays));
+    this.nextNudgeWaypoint();
+  }
+  private nextNudgeWaypoint() {
+    const waypoint = this.nudgeRoute.shift();
+    if (!waypoint) return false;
+    this.nudgeWaypoint = waypoint; this.nudgeElapsed = 0;
+    this.nudgeDeadline = legTimeout(this.brain, waypoint.point, this.brain.width / 160);
+    this.brain.approach(waypoint.point.x, waypoint.point.y);
+    return true;
+  }
+  private shoveCursor(cursor = screen.getCursorScreenPoint()) {
+    if (this.testing) return; // Runtime smoke tests never move the desktop cursor.
+    if (!this.cursorInReach(this.brain.facingRight, cursor)) return;
     const path = pushPath(cursor, this.display.bounds);
     pushCursor(process.platform === 'win32' ? path.map(point => screen.dipToScreenPoint(point)) : path);
   }
@@ -350,10 +383,15 @@ export class PetController {
     cancelCursorPush();
     if (this.nudge === 'idle') return;
     const home = this.nudgeHome;
-    this.nudge = 'idle'; this.nudgeHome = undefined; this.nudgeElapsed = 0; this.sinceNudge = 0; this.struck = false;
+    this.nudge = 'idle'; this.nudgeHome = undefined; this.nudgeRoute = []; this.nudgeWaypoint = undefined; this.nudgeDestination = undefined;
+    this.nudgeElapsed = 0; this.sinceNudge = 0; this.struck = false;
+    this.display = (settle && home ? screen.getAllDisplays().find(d => d.id === home.display.id) : undefined) ?? screen.getDisplayMatching(this.window.getBounds());
+    this.brain.setBounds(this.display.workArea);
     // A pinned cat re-pins on its own spot so the saved place survives the errand.
     // Hands off while the cat is being held: the user's grab wins.
-    if (settle && home && !this.brain.roaming) { this.brain.pin(home.x, home.y); this.moveWindow(); }
+    if (settle && home && !this.brain.roaming) this.brain.pin(home.point.x, home.point.y);
+    if (!this.dragging && !this.pointerPressed) this.moveWindow();
+    this.refreshTray();
   }
   private sendCursor() {
     const cursor = screen.getCursorScreenPoint(), bounds = this.window.getBounds();
@@ -408,6 +446,7 @@ export class PetController {
     if (this.settings.clickThrough || this.menuOpen || this.hidden || this.systemStops.size || this.pointerPressed) return;
     const bounds = this.window.getBounds(), cursor = screen.getCursorScreenPoint();
     this.grab = { x: cursor.x - bounds.x, y: cursor.y - bounds.y }; this.pointerPressed = true;
+    this.endNudge(false);
     this.applyMousePolicy(); this.sendState(); this.restartTick();
   }
   pet() {
@@ -419,6 +458,7 @@ export class PetController {
     const bounds = this.window.getBounds();
     if (!this.pointerPressed) this.grab = { x: cursor.x - bounds.x, y: cursor.y - bounds.y };
     this.dragging = true;
+    this.endNudge(false);
     this.brain.hold(); this.applyMousePolicy(); this.sendState(); this.restartTick();
   }
   moveDrag(cursor: Point) { if (this.dragging) this.window.setBounds({ x: Math.round(cursor.x - this.grab.x), y: Math.round(cursor.y - this.grab.y), width: this.brain.width, height: this.brain.height }, false); }
@@ -430,11 +470,12 @@ export class PetController {
     this.display = screen.getDisplayMatching(rect); this.brain.setBounds(this.display.workArea);
     this.brain.pin(rect.x, rect.y); this.moveWindow(); this.applyMousePolicy(); this.sendState(); this.refreshTray(); this.save(); this.restartTick();
   }
-  setRoaming(value: boolean) { this.brain.setRoaming(value); this.sendState(); this.refreshTray(); this.save(); }
-  setFloorOnly(value: boolean) { this.brain.floorOnly = value; this.brain.setRoaming(this.brain.roaming); this.sendState(); this.refreshTray(); this.save(); }
-  setPaused(value: boolean) { this.endDrag(); this.paused = value; this.sendState(); this.refreshTray(); this.restartTick(); }
+  setRoaming(value: boolean) { this.endNudge(false); this.brain.setRoaming(value); this.sendState(); this.refreshTray(); this.save(); }
+  setFloorOnly(value: boolean) { this.endNudge(false); this.brain.floorOnly = value; this.brain.setRoaming(this.brain.roaming); this.sendState(); this.refreshTray(); this.save(); }
+  setPaused(value: boolean) { this.endNudge(false); this.endDrag(); this.paused = value; this.sendState(); this.refreshTray(); this.restartTick(); }
   setSize(size: number) {
     if (![.75, 1, 1.35].includes(size)) return;
+    this.endNudge(false);
     const foot = { x: this.brain.x + this.brain.width / 2, y: this.brain.y + this.brain.height };
     this.settings.size = size; this.brain.width = Math.round(160 * size); this.brain.height = Math.round(144 * size);
     this.brain.setPosition(foot.x - this.brain.width / 2, foot.y - this.brain.height);
@@ -443,12 +484,14 @@ export class PetController {
     this.sendState(); this.refreshTray(); this.save();
   }
   moveToDisplay(display: Display) {
+    this.endNudge(false);
     this.endDrag(); this.display = display; this.brain.setBounds(display.workArea);
     this.brain.setPosition(display.workArea.x + (display.workArea.width - this.brain.width) / 2, display.workArea.y + display.workArea.height - this.brain.height);
     this.moveWindow(); this.refreshTray(); this.save();
   }
   private refreshDisplays = () => {
     if (this.disposed || this.dragging) return;
+    this.endNudge(false);
     this.display = screen.getDisplayMatching(this.window.getBounds());
     this.brain.setBounds(this.display.workArea); this.moveWindow(); this.refreshTray(); this.save();
   };
@@ -536,13 +579,14 @@ export class PetController {
     this.tray.on('double-click', () => this.recall());
   }
   private refreshTray() { this.tray?.setContextMenu(this.menu()); this.publishPreferences(); }
+  private positionSnapshot() {
+    const display = this.nudgeHome?.display ?? this.display, spot = this.nudgeHome?.point ?? this.brain;
+    return { displayId: String(display.id), displayLabel: display.label,
+      ...relativePosition(spot, display.workArea, this.brain.width, this.brain.height) };
+  }
   save() {
     if (this.testing || this.disposed) return;
-    const a = this.display.workArea, spot = this.nudgeHome ?? this.brain;
-    Object.assign(this.settings, { displayId: String(this.display.id), displayLabel: this.display.label,
-      relativeX: Math.max(0, Math.min(1, (spot.x - a.x) / Math.max(1, a.width - this.brain.width))),
-      relativeY: Math.max(0, Math.min(1, (spot.y - a.y) / Math.max(1, a.height - this.brain.height))),
-      roaming: this.brain.roaming, floorOnly: this.brain.floorOnly });
+    Object.assign(this.settings, { ...this.positionSnapshot(), roaming: this.brain.roaming, floorOnly: this.brain.floorOnly });
     try { saveSettings(this.settingsFile, this.settings); this.saveFailed = false; }
     catch (error) { this.saveFailed = true; console.error('Settings save failed:', error); if (!this.warnedSave) { this.warnedSave = true; void dialog.showMessageBox({ title: 'Animo', type: 'warning', message: '설정을 저장하지 못했습니다. 다음 실행에서는 위치가 초기화될 수 있습니다.' }); } }
   }
@@ -561,4 +605,17 @@ export class PetController {
   }
   stopForVerification() { this.verificationStopped = true; if (this.timer) clearTimeout(this.timer); }
   resumeForVerification() { this.verificationStopped = false; this.lastTick = performance.now(); this.restartTick(); }
+  startNudgeForVerification(cursor: Point) {
+    if (!this.testing) throw new Error('Only available during verification.');
+    this.sinceNudge = NUDGE_INTERVAL_SECONDS;
+    this.updateKeepAwake(0, cursor, NUDGE_IDLE_SECONDS);
+    return this.nudgeSnapshot();
+  }
+  stepNudgeForVerification(delta: number, cursor: Point) {
+    if (!this.testing) throw new Error('Only available during verification.');
+    if (!this.paused && !this.pointerPressed && !this.dragging && !this.hidden && !this.systemStops.size) { this.brain.tick(delta); this.moveWindow(); }
+    this.updateKeepAwake(delta, cursor, NUDGE_IDLE_SECONDS); this.sendState();
+    return this.nudgeSnapshot();
+  }
+  private nudgeSnapshot() { return { phase: this.nudge, displayId: this.display.id, position: { x: this.brain.x, y: this.brain.y }, savedPosition: this.positionSnapshot() }; }
 }

@@ -49,7 +49,7 @@ export function pawPoint(cat: Point, width: number, height: number, facingRight:
   return { x: cat.x + width * (facingRight ? PAW_X : 1 - PAW_X), y: cat.y + height * PAW_Y };
 }
 
-/** A cursor on another monitor stays out of reach; skip the shove instead of lunging at it. */
+/** Only shove after the travelling cat's paw is actually within reach. */
 export function inPushRange(paw: Point, cursor: Point, scale: number) {
   return Math.hypot(cursor.x - paw.x, cursor.y - paw.y) <= 46 * scale;
 }

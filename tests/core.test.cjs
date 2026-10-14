@@ -188,7 +188,7 @@ test('the cat faces inward for a shove and stays within reach at screen edges', 
     'the errand leaves the floor so a cursor further up is still reachable');
   const offscreen = approachTarget({ x: 2600, y: 500 }, area, width, height);
   assert.equal(inPushRange(pawPoint(offscreen.point, width, height, offscreen.facingRight), { x: 2600, y: 500 }, 1), false,
-    'a cursor on another monitor is out of reach and the shove is skipped');
+    'a cursor remains out of reach until the cat has crossed onto its monitor');
 
   const path = pushPath({ x: 900, y: 500 }, area);
   assert.ok(path.length > 1);
