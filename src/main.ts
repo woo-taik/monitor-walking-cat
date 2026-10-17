@@ -13,7 +13,7 @@ import { approachTarget, inPushRange, legTimeout, pawPoint, pushPath, wantsNudge
 import { PAW_DURATION, PAW_CONTACT_TIME } from './shared/gait.js';
 import { cancelCursorPush, isCursorPushReady, prepareCursorPush, pushCursor } from './cursor.js';
 import { defaults, loadSettings, saveSettings } from './settings.js';
-import type { Anchor, PetState, Point, PreferencesSnapshot, Settings } from './shared/types.js';
+import type { Anchor, AwakeMode, PetState, Point, PreferencesSnapshot, Settings } from './shared/types.js';
 import { runSmoke } from './smoke.js';
 import { runCiSmoke } from './ci-smoke.js';
 
@@ -78,6 +78,9 @@ export class PetController {
   private lastCursor = '';
   private verificationStopped = false;
   private blocker?: number;
+  private awakeMode: AwakeMode = 0;
+  private awakeEndsAt: number | null = null;
+  private awakeTimer?: NodeJS.Timeout;
   private nudge: 'idle' | 'approach' | 'paw' | 'return' = 'idle';
   private struck = false;
   private nudgeHome?: { point: Point; display: Display };
@@ -203,8 +206,9 @@ export class PetController {
     win.focus();
   }
   preferencesSnapshot(): PreferencesSnapshot {
+    this.checkKeepAwakeExpiry();
     return { size: this.settings.size, roaming: this.brain.roaming, floorOnly: this.brain.floorOnly, clickThrough: this.settings.clickThrough,
-      allWorkspaces: this.settings.allWorkspaces, keepAwake: this.settings.keepAwake, hidden: this.hidden, paused: this.paused, platform: process.platform, displayId: String(this.display.id),
+      allWorkspaces: this.settings.allWorkspaces, awakeMode: this.awakeMode, awakeEndsAt: this.awakeEndsAt, hidden: this.hidden, paused: this.paused, platform: process.platform, displayId: String(this.display.id),
       displays: screen.getAllDisplays().map((d, index) => ({ id: String(d.id), name: `모니터 ${index + 1}${d.id === screen.getPrimaryDisplay().id ? ' (주 화면)' : ''}${d.label ? ` · ${d.label}` : ''}` })),
       presets: this.settings.presets.map(p => ({ ...p })) };
   }
@@ -252,7 +256,10 @@ export class PetController {
       case 'roaming': this.setRoaming(boolean()); break;
       case 'floor-only': this.setFloorOnly(boolean()); break;
       case 'click-through': this.setClickThrough(boolean()); break;
-      case 'keep-awake': this.setKeepAwake(boolean()); break;
+      case 'keep-awake': {
+        if (![0, 30, 60, 120, 'session'].includes(c.mode as AwakeMode)) throw new Error('화면보호기 방지 시간을 선택해 주세요.');
+        this.setKeepAwake(c.mode as AwakeMode); break;
+      }
       case 'paused': this.setPaused(boolean()); break;
       case 'hidden': if (boolean() !== this.hidden) this.toggleHidden(); break;
       case 'all-workspaces': {
@@ -272,7 +279,7 @@ export class PetController {
       }
       default: throw new Error('지원하지 않는 설정입니다.');
     }
-    if (this.saveFailed && !['paused', 'hidden'].includes(String(c.kind))) notice = '변경은 적용했지만 설정 파일을 저장하지 못했습니다. 다음 실행에서 복원되지 않을 수 있어요.';
+    if (this.saveFailed && !['paused', 'hidden', 'keep-awake'].includes(String(c.kind))) notice = '변경은 적용했지만 설정 파일을 저장하지 못했습니다. 다음 실행에서 복원되지 않을 수 있어요.';
     return { snapshot: this.preferencesSnapshot(), notice };
   }
 
@@ -290,15 +297,30 @@ export class PetController {
   }
 
   private applyKeepAwake() {
-    const wanted = this.settings.keepAwake && !this.testing;
+    const wanted = this.awakeMode !== 0 && !this.testing;
     if (wanted && this.blocker === undefined) this.blocker = powerSaveBlocker.start('prevent-display-sleep');
     else if (!wanted && this.blocker !== undefined) { powerSaveBlocker.stop(this.blocker); this.blocker = undefined; }
   }
-  setKeepAwake(value: boolean) {
-    this.settings.keepAwake = value;
+  setKeepAwake(mode: AwakeMode) {
+    if (this.awakeTimer) { clearTimeout(this.awakeTimer); this.awakeTimer = undefined; }
+    this.awakeMode = mode;
+    this.awakeEndsAt = typeof mode === 'number' && mode > 0 ? Date.now() + mode * 60_000 : null;
     this.applyKeepAwake();
-    if (!value) this.endNudge(false);
-    this.refreshTray(); this.save();
+    if (mode === 0) this.endNudge(false);
+    this.scheduleAwakeExpiry();
+    this.refreshTray();
+  }
+  private scheduleAwakeExpiry() {
+    if (this.awakeEndsAt === null || this.disposed) return;
+    this.awakeTimer = setTimeout(() => {
+      this.awakeTimer = undefined;
+      if (!this.checkKeepAwakeExpiry()) this.scheduleAwakeExpiry();
+    }, Math.max(1, Math.min(this.awakeEndsAt - Date.now(), 30_000)));
+  }
+  checkKeepAwakeExpiry(now = Date.now()) {
+    if (this.awakeEndsAt === null || now < this.awakeEndsAt) return false;
+    this.setKeepAwake(0);
+    return true;
   }
   isKeepingAwake() { return this.blocker !== undefined && powerSaveBlocker.isStarted(this.blocker); }
   /** Walk to the cursor, swipe at it, then go back to the spot the cat was keeping. */
@@ -306,7 +328,7 @@ export class PetController {
     const busy = this.dragging || this.paused || this.menuOpen || this.pointerPressed || this.hidden || this.systemStops.size > 0;
     this.sinceNudge += delta;
     if (this.nudge === 'idle') {
-      if (!wantsNudge({ enabled: this.settings.keepAwake, busy, idleSeconds, sinceNudge: this.sinceNudge })) return;
+      if (!wantsNudge({ enabled: this.awakeMode !== 0, busy, idleSeconds, sinceNudge: this.sinceNudge })) return;
       this.display = screen.getDisplayMatching(this.window.getBounds());
       this.nudgeHome = { point: { x: this.brain.x, y: this.brain.y }, display: this.display };
       if (!this.testing) void prepareCursorPush();
@@ -314,7 +336,7 @@ export class PetController {
       return;
     }
     this.nudgeElapsed += delta;
-    if (busy || !this.settings.keepAwake) { this.endNudge(false); return; }
+    if (busy || this.awakeMode === 0) { this.endNudge(false); return; }
     const expired = this.nudgeElapsed > this.nudgeDeadline;
     if (this.nudge === 'approach' && screen.getDisplayNearestPoint(cursor).id !== this.nudgeDestination?.id) { this.approachCursor(cursor); return; }
     if (this.nudge === 'paw') {
@@ -409,6 +431,7 @@ export class PetController {
   }
   private restartTick() { if (this.timer) clearTimeout(this.timer); this.scheduleTick(); }
   private systemStop(reason: string, stopped: boolean) {
+    this.checkKeepAwakeExpiry();
     if (stopped) { this.endNudge(false); this.endDrag(); this.closeMenu(); this.save(); this.systemStops.add(reason); }
     else { this.systemStops.delete(reason); if (!this.systemStops.size) this.refreshDisplays(); }
     this.lastTick = performance.now(); this.sendState();
@@ -535,7 +558,12 @@ export class PetController {
         ...(this.settings.presets.length ? [{ type: 'separator' as const }, ...this.settings.presets.map(p => ({ id: `preset-${p.id}`, label: process.platform === 'win32' ? p.name.replace(/&/g, '&&') : p.name, click: () => { const fallback = this.loadPosition(p.id); if (fallback) void dialog.showMessageBox({ title: 'Animo', message: '저장했던 모니터가 연결되어 있지 않아 주 화면에 배치했습니다.' }); } }))] : [])
       ] },
       checkbox('click-through', '고양이도 클릭 통과', this.settings.clickThrough, () => this.setClickThrough(!this.settings.clickThrough)),
-      checkbox('keep-awake', '화면보호기 방지', this.settings.keepAwake, () => this.setKeepAwake(!this.settings.keepAwake)),
+      { label: '화면보호기 방지', submenu: [
+        { id: 'keep-awake-off', label: '끄기', type: 'radio', checked: this.awakeMode === 0, click: () => this.setKeepAwake(0) },
+        ...([[30, '30분'], [60, '1시간'], [120, '2시간'], ['session', '종료할 때까지']] as const).map(([mode, label]) => ({
+          id: `keep-awake-${mode}`, label, type: 'radio' as const, checked: this.awakeMode === mode, click: () => this.setKeepAwake(mode)
+        }))
+      ] },
       { id: 'hide', label: this.hidden ? '고양이 보이기' : '고양이 숨기기', click: () => this.toggleHidden() },
       { id: 'recall', label: '고양이 찾기 · 위치 초기화', click: () => this.recall() }
     ];
@@ -593,6 +621,7 @@ export class PetController {
   dispose() {
     if (this.disposed) return;
     this.save(); this.disposed = true;
+    if (this.awakeTimer) { clearTimeout(this.awakeTimer); this.awakeTimer = undefined; }
     if (this.blocker !== undefined) { powerSaveBlocker.stop(this.blocker); this.blocker = undefined; }
     cancelCursorPush();
     this.preferencesWindow?.destroy();

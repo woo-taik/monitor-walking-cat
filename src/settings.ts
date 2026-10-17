@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { PositionPreset, Settings } from './shared/types.js';
 export const defaults: Settings = {
-  version: 3, displayId: '', displayLabel: '', relativeX: .65, relativeY: 1, size: 1,
-  roaming: true, floorOnly: true, clickThrough: false, allWorkspaces: true, keepAwake: false, presets: []
+  version: 4, displayId: '', displayLabel: '', relativeX: .65, relativeY: 1, size: 1,
+  roaming: true, floorOnly: true, clickThrough: false, allWorkspaces: true, presets: []
 };
 export function validateSettings(value: unknown): Settings {
   const v = value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
@@ -21,9 +21,9 @@ export function validateSettings(value: unknown): Settings {
       relativeX: Math.max(0, Math.min(1, p.relativeX)), relativeY: Math.max(0, Math.min(1, p.relativeY)) });
     if (presets.length === 8) break;
   }
-  return { version: 3, displayId: typeof v.displayId === 'string' ? v.displayId : '', displayLabel: typeof v.displayLabel === 'string' ? v.displayLabel : '',
+  return { version: 4, displayId: typeof v.displayId === 'string' ? v.displayId : '', displayLabel: typeof v.displayLabel === 'string' ? v.displayLabel : '',
     relativeX: finite('relativeX', 0, 1), relativeY: finite('relativeY', 0, 1), size: finite('size', .65, 1.5),
-    roaming: bool('roaming'), floorOnly: bool('floorOnly'), clickThrough: bool('clickThrough'), allWorkspaces: bool('allWorkspaces'), keepAwake: bool('keepAwake'), presets };
+    roaming: bool('roaming'), floorOnly: bool('floorOnly'), clickThrough: bool('clickThrough'), allWorkspaces: bool('allWorkspaces'), presets };
 }
 export function loadSettings(file: string, legacyFile?: string): Settings {
   try { return validateSettings(JSON.parse(fs.readFileSync(file, 'utf8'))); }
