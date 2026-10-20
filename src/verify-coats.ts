@@ -31,6 +31,8 @@ export async function verifyCoats(controller: PetController, preferences: Browse
       for (const pose of ['sitting', 'walking', 'sleeping', 'held', 'stretching', 'grooming', 'petted', 'pawing']) {
         await win.webContents.executeJavaScript(`window.animoPreview.render({pose:'${pose}',coat:'${coat}',time:1.15,poseTime:1.5,gaitTime:1.15,speed:52})`);
         assert(await win.webContents.executeJavaScript(`document.querySelector('#pet [fill="${COATS[coat].fur}"]') !== null && document.querySelector('#pet filter feFlood').getAttribute('flood-color') === '${COATS[coat].ink}' && document.querySelectorAll('#pet .cat-layer').length === 1`));
+        // Allow Chromium to paint the new SVG before capturing the previous compositor frame.
+        await new Promise(resolve => setTimeout(resolve, 80));
         const image = await win.webContents.capturePage();
         assert(!image.isEmpty());
         const pixels = image.toBitmap();

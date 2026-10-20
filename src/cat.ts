@@ -61,7 +61,11 @@ export function catFrame(state: PetState, markup = false, prefix = 'cat', facing
   };
   const face = () => {
     const closed = state.pose === 'petted' || state.pose === 'grooming' || t % 5.3 < .16;
-    const eyesOpen = group({ opacity: closed ? 0 : 1 }, ellipse(93, 65, 4.5, 6, eyes) + ellipse(119, 65, 4.5, 6, eyes) + ellipse(94, 63, 1.5, 2, '#fff') + ellipse(120, 63, 1.5, 2, '#fff'));
+    const black = state.coat === 'black';
+    const eye = (x: number) => ellipse(x, 65, 4.5, black ? 5 : 6, eyes)
+      + (black ? ellipse(x, 65.3, 3.3, 3.9, ink) : '')
+      + ellipse(x + 1, 63, black ? 1.2 : 1.5, black ? 1.4 : 2, '#fff');
+    const eyesOpen = group({ opacity: closed ? 0 : 1 }, eye(93) + eye(119));
     const eyesClosed = group({ opacity: closed ? 1 : 0 }, path('M88,65 Q93,70 98,65 M114,65 Q119,70 124,65', 'none', ink, 1.7));
     const art = path('M76,48 L75,24 Q75,19 80,22 L96,35 Q107,32 116,36 L129,22 Q133,19 133,25 L131,49 Q140,61 134,78 Q129,91 107,93 Q83,92 76,78 Q69,63 76,48 Z', fur)
       + path('M80,29 L82,44 L91,38 Z M128,29 L118,39 L128,44 Z', pink, 'none')
