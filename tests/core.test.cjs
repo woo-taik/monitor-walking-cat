@@ -115,6 +115,13 @@ test('settings roundtrip, validation, corrupt-file fallback and WPF migration', 
     const file = path.join(directory, 'settings.json'), legacy = path.join(directory, 'legacy.json');
     const settings = validateSettings({ relativeX: .2, relativeY: .6, size: 1.35, roaming: false, clickThrough: true });
     saveSettings(file, settings); assert.deepEqual(loadSettings(file), settings);
+    assert.equal(settings.coat, 'cheese', 'Existing settings should keep the original appearance');
+    for (const coat of ['cheese', 'gray', 'black']) {
+      const colored = validateSettings({ ...settings, coat });
+      assert.equal(colored.coat, coat);
+      saveSettings(file, colored); assert.deepEqual(loadSettings(file), colored);
+    }
+    for (const coat of [undefined, null, 'purple', '__proto__', 'toString', 1, {}]) assert.equal(validateSettings({ ...settings, coat }).coat, 'cheese');
     fs.writeFileSync(file, 'invalid'); assert.equal(loadSettings(file).size, 1);
     assert.equal(validateSettings({ size: 100, relativeX: -4, relativeY: 10 }).size, 1.5);
     assert.equal(validateSettings({ roaming: 'false' }).roaming, true);

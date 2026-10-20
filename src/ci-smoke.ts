@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { screen } from 'electron';
 import type { PetController } from './main.js';
+import { verifyCoats } from './verify-coats.js';
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 function verifyMonitorVisits(controller: PetController, lines: string[]) {
@@ -151,6 +152,8 @@ export async function runCiSmoke(controller: PetController, output: string) {
     }
     assert.equal(await preferences.webContents.executeJavaScript('typeof window.require'), 'undefined');
     assert.equal(await preferences.webContents.executeJavaScript('typeof window.animo'), 'undefined');
+    await verifyCoats(controller, preferences, output);
+    lines.push('PASS: three coat controls apply while paused; all 24 coat/pose combinations render; placement and behavior stay unchanged; tray synchronizes; invalid coats rejected.');
     await preferences.webContents.executeJavaScript("window.preferences.change({kind:'size',value:.75})");
     assert.equal(controller.settings.size, .75);
     await preferences.webContents.executeJavaScript("window.preferences.change({kind:'save-position',name:'CI position'})");

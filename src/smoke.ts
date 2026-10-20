@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import type { PetController } from './main.js';
+import { verifyCoats } from './verify-coats.js';
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // OS input is necessary here: webContents.sendInputEvent never reaches the native menu.
 async function nativeInput(action: 'left' | 'right' | 'escape' | 'move' | 'left-down' | 'left-up', point = screen.getCursorScreenPoint()) {
@@ -289,6 +290,8 @@ export async function runSmoke(controller: PetController, output: string) {
     assert.equal(await preferences.webContents.executeJavaScript('typeof window.require'), 'undefined');
     assert.equal(await preferences.webContents.executeJavaScript('typeof window.animo'), 'undefined');
     assert.equal(await preferences.webContents.executeJavaScript('typeof window.preferences.change'), 'function');
+    await verifyCoats(controller, preferences, output);
+    lines.push('PASS: three coats apply while paused, render all eight poses, preserve behavior, synchronize menus and reject invalid IPC.');
     const invalid = await preferences.webContents.executeJavaScript(`window.preferences.change({kind:'size',value:900}).then(()=>false,()=>true)`);
     assert(invalid); assert.equal(controller.settings.size, 1);
     await preferences.webContents.executeJavaScript('document.querySelector("input[name=size][value=\\"1.35\\"]").click()');
@@ -357,6 +360,7 @@ export async function runSmoke(controller: PetController, output: string) {
     preferences.close(); await wait(50); assert(!win.isDestroyed());
     const reopened = await controller.openPreferences();
     await until(async () => await reopened.webContents.executeJavaScript(`document.querySelectorAll('[data-load]').length`) === 2, 'Saved positions disappeared on reopen');
+    assert.equal(await reopened.webContents.executeJavaScript('document.querySelector("input[name=coat]:checked").value'), controller.settings.coat);
     reopened.close(); await wait(50);
     lines.push('PASS: saved positions work from native menus and survive settings-window close/reopen; closing settings leaves the cat running.');
     lines.push(`INFO: platform=${process.platform}, Electron=${process.versions.electron}; macOS physical input/Spaces require manual verification; CI covers packaged runtime.`);

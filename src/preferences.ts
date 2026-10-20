@@ -1,12 +1,21 @@
 import { catSVG } from './cat.js';
+import { COATS, type CatCoat } from './shared/coats.js';
 import type { Anchor, PreferencesAPI, PreferencesCommand, PreferencesSnapshot } from './shared/types.js';
 declare global { interface Window { preferences?: PreferencesAPI } }
 const byId = <T extends HTMLElement>(id: string) => document.getElementById(id)! as T;
 const status = byId('status'), name = byId<HTMLInputElement>('preset-name');
+for (const coat of Object.keys(COATS) as CatCoat[]) {
+  const label = document.createElement('label'), radio = document.createElement('input'), text = document.createElement('span'), swatch = document.createElement('i');
+  radio.type = 'radio'; radio.name = 'coat'; radio.value = coat;
+  swatch.setAttribute('aria-hidden', 'true'); swatch.style.backgroundColor = COATS[coat].fur;
+  text.append(swatch, COATS[coat].name); label.append(radio, text); byId('coat-options').append(label);
+  radio.addEventListener('change', () => post({ kind: 'coat', value: coat }));
+}
 let snapshot: PreferencesSnapshot | undefined, displayKey = '', presetKey = '', queue = Promise.resolve();
 function message(text: string, error = false) { status.textContent = text; status.classList.toggle('error', error); }
 function render(next: PreferencesSnapshot) {
   snapshot = next;
+  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="coat"]')) radio.checked = radio.value === next.coat;
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="size"]')) radio.checked = Number(radio.value) === next.size;
   byId<HTMLInputElement>('roaming').checked = next.roaming;
   byId<HTMLSelectElement>('floor').value = next.floorOnly ? 'floor' : 'desktop';
@@ -21,7 +30,7 @@ function render(next: PreferencesSnapshot) {
   const current = next.displays.find(d => d.id === next.displayId);
   byId('summary').textContent = `${current?.name ?? '현재 모니터'} · ${next.floorOnly ? '화면 아래쪽' : '화면 전체'}`;
   const preview = byId('preview'); preview.style.width = `${160 * next.size}px`; preview.style.height = `${144 * next.size}px`;
-  preview.innerHTML = catSVG({ pose: next.roaming && !next.paused ? 'walking' : 'sitting', facingRight: true, time: 1.15, size: next.size,
+  preview.innerHTML = catSVG({ coat: next.coat, pose: next.roaming && !next.paused ? 'walking' : 'sitting', facingRight: true, time: 1.15, size: next.size,
     frozen: next.paused, clickThrough: next.clickThrough, poseTime: 1.15, gaitTime: 1.15, speed: next.roaming ? 52 : 0 });
   const nextDisplayKey = JSON.stringify(next.displays);
   if (displayKey !== nextDisplayKey) {

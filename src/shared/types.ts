@@ -1,7 +1,9 @@
+import type { CatCoat } from './coats.js';
 export type Pose = 'sitting' | 'walking' | 'sleeping' | 'held' | 'stretching' | 'grooming' | 'petted' | 'pawing';
 export interface Point { x: number; y: number }
 export interface Bounds extends Point { width: number; height: number }
 export interface PetState {
+  coat: CatCoat;
   pose: Pose;
   facingRight: boolean;
   time: number;
@@ -14,6 +16,7 @@ export interface PetState {
 }
 export interface Settings {
   version: 3;
+  coat: CatCoat;
   displayId: string;
   displayLabel: string;
   relativeX: number;
@@ -36,6 +39,7 @@ export interface PositionPreset {
 }
 export type Anchor = 'bottom-left' | 'bottom-center' | 'bottom-right';
 export interface PreferencesSnapshot {
+  coat: CatCoat;
   size: number;
   roaming: boolean;
   floorOnly: boolean;
@@ -50,6 +54,7 @@ export interface PreferencesSnapshot {
   presets: PositionPreset[];
 }
 export type PreferencesCommand =
+  | { kind: 'coat'; value: CatCoat }
   | { kind: 'size'; value: number }
   | { kind: 'roaming' | 'floor-only' | 'click-through' | 'all-workspaces' | 'keep-awake' | 'hidden' | 'paused'; value: boolean }
   | { kind: 'display'; id: string }

@@ -4,7 +4,7 @@ import type { PetAPI, PetState, Point } from './shared/types.js';
 type Stats = { builds: number; updates: number; attributeWrites: number; skipped: number };
 declare global { interface Window { animo?: PetAPI; animoPreview?: { render: (state: Partial<PetState>, immediate?: boolean) => void; hit: (x: number, y: number) => boolean; getState: () => PetState; stats: () => Stats }; } }
 const root = document.getElementById('pet')!;
-let state: PetState = { pose: 'sitting', facingRight: true, time: 1, size: 1, clickThrough: false, frozen: false, poseTime: 0, gaitTime: 0, speed: 0 };
+let state: PetState = { coat: 'cheese', pose: 'sitting', facingRight: true, time: 1, size: 1, clickThrough: false, frozen: false, poseTime: 0, gaitTime: 0, speed: 0 };
 const stats: Stats = { builds: 0, updates: 0, attributeWrites: 0, skipped: 0 };
 const gesture = new PetGesture();
 let hovered = false, pressed = false, cursor = { x: -1, y: -1 }, signature = '', facing = 1, transitionStart = 0;
@@ -29,6 +29,8 @@ function updateLayer(layer: Layer, next: PetState) {
 function render(next: PetState, immediate = false) {
   const nextSignature = JSON.stringify(next);
   if (!immediate && nextSignature === signature) { stats.skipped++; return; }
+  // Rebuild the static SVG outline filter too, including while paused or fading poses.
+  if (state.coat !== next.coat) { outgoing?.element.remove(); outgoing = undefined; active?.element.remove(); active = undefined; }
   const delta = Math.max(0, Math.min(.25, next.time - state.time)), desiredFacing = next.facingRight ? 1 : -1;
   facing = immediate ? desiredFacing : facing + (desiredFacing - facing) * Math.min(1, delta * 12);
   if (Math.abs(facing - desiredFacing) < .002) facing = desiredFacing;

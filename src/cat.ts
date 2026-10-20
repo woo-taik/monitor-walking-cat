@@ -1,11 +1,12 @@
 import { legStep, pawReach, pawSwishFade } from './shared/gait.js';
 import type { PetState, Point } from './shared/types.js';
-const fur = '#FFD99B', cream = '#FFF0D0', stripe = '#DE9959', pink = '#F3A2A3', ink = '#594136';
+import { COATS } from './shared/coats.js';
 type Attributes = Record<string, string>;
 export interface CatFrame { markup: string; attributes: Map<string, Attributes> }
 
 // Build an SVG once per pose; later frames update attributes in the existing tree.
 export function catFrame(state: PetState, markup = false, prefix = 'cat', facing = state.facingRight ? 1 : -1): CatFrame {
+  const { fur, cream, stripe, pink, ink, farFur, farInk, blush, eyes } = COATS[state.coat];
   const attributes = new Map<string, Attributes>();
   let index = 0;
   const node = (tag: string, values: Record<string, string | number>, children = '') => {
@@ -14,7 +15,7 @@ export function catFrame(state: PetState, markup = false, prefix = 'cat', facing
     return markup ? `<${tag} data-part="${key}" ${Object.entries(attrs).map(([k, v]) => `${k}="${v}"`).join(' ')}>${children}</${tag}>` : '';
   };
   const group = (attrs: Record<string, string | number>, children: string) => node('g', attrs, children);
-  const path = (d: string, fill = 'none', stroke = ink, width = 2.8) => node('path', { d, fill, stroke, 'stroke-width': width, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+  const path = (d: string, fill = 'none', stroke: string = ink, width = 2.8) => node('path', { d, fill, stroke, 'stroke-width': width, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
   const ellipse = (cx: number, cy: number, rx: number, ry: number, fill: string) => node('ellipse', { cx, cy, rx, ry, fill });
   const toes = (p: Point) => path(`M ${p.x + 2},${p.y + 2} v 2 M ${p.x + 6},${p.y + 2} v 2`, 'none', ink, 1.1);
   const leg = (hip: Point, knee: Point, ankle: Point, foot: Point) => `M ${hip.x - 6},${hip.y} Q ${knee.x - 6},${knee.y} ${ankle.x - 4},${ankle.y} Q ${foot.x - 8},${foot.y} ${foot.x - 7},${foot.y + 3} Q ${foot.x - 6},${foot.y + 5} ${foot.x + 4},${foot.y + 5} Q ${foot.x + 11},${foot.y + 5} ${foot.x + 10},${foot.y + 1} Q ${foot.x + 9},${foot.y - 2} ${ankle.x + 4},${ankle.y - 1} Q ${knee.x + 5},${knee.y - 1} ${hip.x + 6},${hip.y} Z`;
@@ -54,18 +55,18 @@ export function catFrame(state: PetState, markup = false, prefix = 'cat', facing
     }
     const shapes = group({ id: `${prefix}-body` }, shape);
     const clip = node('clipPath', { id: `${prefix}-clip` }, node('use', { href: `#${prefix}-body` }));
-    return (markup ? `<defs>${shapes}${clip}</defs>` : '') + path(far, '#E8BD80', '#88634B', 2.3)
+    return (markup ? `<defs>${shapes}${clip}</defs>` : '') + path(far, farFur, farInk, 2.3)
       + node('use', { href: `#${prefix}-body`, filter: `url(#${prefix}-outline)` })
       + group({ 'clip-path': `url(#${prefix}-clip)` }, belly) + detail + feet;
   };
   const face = () => {
     const closed = state.pose === 'petted' || state.pose === 'grooming' || t % 5.3 < .16;
-    const eyesOpen = group({ opacity: closed ? 0 : 1 }, ellipse(93, 65, 4.5, 6, ink) + ellipse(119, 65, 4.5, 6, ink) + ellipse(94, 63, 1.5, 2, '#fff') + ellipse(120, 63, 1.5, 2, '#fff'));
+    const eyesOpen = group({ opacity: closed ? 0 : 1 }, ellipse(93, 65, 4.5, 6, eyes) + ellipse(119, 65, 4.5, 6, eyes) + ellipse(94, 63, 1.5, 2, '#fff') + ellipse(120, 63, 1.5, 2, '#fff'));
     const eyesClosed = group({ opacity: closed ? 1 : 0 }, path('M88,65 Q93,70 98,65 M114,65 Q119,70 124,65', 'none', ink, 1.7));
     const art = path('M76,48 L75,24 Q75,19 80,22 L96,35 Q107,32 116,36 L129,22 Q133,19 133,25 L131,49 Q140,61 134,78 Q129,91 107,93 Q83,92 76,78 Q69,63 76,48 Z', fur)
       + path('M80,29 L82,44 L91,38 Z M128,29 L118,39 L128,44 Z', pink, 'none')
       + ellipse(105, 79, 21, 11, cream) + path('M99,37 L102,47 M107,36 L107,46 M115,38 L112,47', 'none', stripe, 3.5) + eyesOpen + eyesClosed
-      + ellipse(85, 76, 5, 2.6, '#EFB3A0') + ellipse(128, 76, 5, 2.6, '#EFB3A0')
+      + ellipse(85, 76, 5, 2.6, blush) + ellipse(128, 76, 5, 2.6, blush)
       + path('M102,74 Q106,71 110,74 L106,78 Z', pink, 'none')
       + path('M106,78 L106,81 Q102,86 99,81 M106,81 Q110,86 113,81', 'none', ink, 1.7)
       + path('M87,78 L70,75 M87,82 L71,85 M124,78 L141,75 M124,82 L141,85', 'none', ink, 1.2);

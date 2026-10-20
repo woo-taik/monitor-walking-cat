@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { PositionPreset, Settings } from './shared/types.js';
+import { isCatCoat } from './shared/coats.js';
 export const defaults: Settings = {
-  version: 3, displayId: '', displayLabel: '', relativeX: .65, relativeY: 1, size: 1,
+  version: 3, coat: 'cheese', displayId: '', displayLabel: '', relativeX: .65, relativeY: 1, size: 1,
   roaming: true, floorOnly: true, clickThrough: false, allWorkspaces: true, keepAwake: false, presets: []
 };
 export function validateSettings(value: unknown): Settings {
@@ -21,7 +22,7 @@ export function validateSettings(value: unknown): Settings {
       relativeX: Math.max(0, Math.min(1, p.relativeX)), relativeY: Math.max(0, Math.min(1, p.relativeY)) });
     if (presets.length === 8) break;
   }
-  return { version: 3, displayId: typeof v.displayId === 'string' ? v.displayId : '', displayLabel: typeof v.displayLabel === 'string' ? v.displayLabel : '',
+  return { version: 3, coat: isCatCoat(v.coat) ? v.coat : defaults.coat, displayId: typeof v.displayId === 'string' ? v.displayId : '', displayLabel: typeof v.displayLabel === 'string' ? v.displayLabel : '',
     relativeX: finite('relativeX', 0, 1), relativeY: finite('relativeY', 0, 1), size: finite('size', .65, 1.5),
     roaming: bool('roaming'), floorOnly: bool('floorOnly'), clickThrough: bool('clickThrough'), allWorkspaces: bool('allWorkspaces'), keepAwake: bool('keepAwake'), presets };
 }

@@ -13,6 +13,7 @@ import { approachTarget, inPushRange, legTimeout, pawPoint, pushPath, wantsNudge
 import { PAW_DURATION, PAW_CONTACT_TIME } from './shared/gait.js';
 import { cancelCursorPush, isCursorPushReady, prepareCursorPush, pushCursor } from './cursor.js';
 import { defaults, loadSettings, saveSettings } from './settings.js';
+import { COATS, isCatCoat, type CatCoat } from './shared/coats.js';
 import type { Anchor, PetState, Point, PreferencesSnapshot, Settings } from './shared/types.js';
 import { runSmoke } from './smoke.js';
 import { runCiSmoke } from './ci-smoke.js';
@@ -203,7 +204,7 @@ export class PetController {
     win.focus();
   }
   preferencesSnapshot(): PreferencesSnapshot {
-    return { size: this.settings.size, roaming: this.brain.roaming, floorOnly: this.brain.floorOnly, clickThrough: this.settings.clickThrough,
+    return { coat: this.settings.coat, size: this.settings.size, roaming: this.brain.roaming, floorOnly: this.brain.floorOnly, clickThrough: this.settings.clickThrough,
       allWorkspaces: this.settings.allWorkspaces, keepAwake: this.settings.keepAwake, hidden: this.hidden, paused: this.paused, platform: process.platform, displayId: String(this.display.id),
       displays: screen.getAllDisplays().map((d, index) => ({ id: String(d.id), name: `모니터 ${index + 1}${d.id === screen.getPrimaryDisplay().id ? ' (주 화면)' : ''}${d.label ? ` · ${d.label}` : ''}` })),
       presets: this.settings.presets.map(p => ({ ...p })) };
@@ -248,6 +249,7 @@ export class PetController {
     const boolean = () => { if (typeof c.value !== 'boolean') throw new Error('설정 값을 확인해 주세요.'); return c.value; };
     const id = () => { if (typeof c.id !== 'string') throw new Error('자리를 선택해 주세요.'); return c.id; };
     switch (c.kind) {
+      case 'coat': if (!isCatCoat(c.value)) throw new Error('고양이 색상을 선택해 주세요.'); this.setCoat(c.value); break;
       case 'size': if (typeof c.value !== 'number' || ![.75, 1, 1.35].includes(c.value)) throw new Error('고양이 크기를 선택해 주세요.'); this.setSize(c.value); break;
       case 'roaming': this.setRoaming(boolean()); break;
       case 'floor-only': this.setFloorOnly(boolean()); break;
@@ -421,7 +423,7 @@ export class PetController {
   private onBattery = () => { this.battery = true; };
   private onAC = () => { this.battery = false; };
 
-  state(): PetState { return { pose: this.brain.pose, facingRight: this.brain.facingRight, time: this.time, size: this.settings.size,
+  state(): PetState { return { coat: this.settings.coat, pose: this.brain.pose, facingRight: this.brain.facingRight, time: this.time, size: this.settings.size,
     clickThrough: this.settings.clickThrough, frozen: this.paused || this.hidden || this.menuOpen || (this.pointerPressed && !this.dragging) || this.systemStops.size > 0,
     poseTime: this.brain.poseTime, gaitTime: this.brain.gaitTime, speed: this.brain.speed / (this.brain.width / 160) }; }
   sendState() {
@@ -442,6 +444,7 @@ export class PetController {
     if (force || this.ignored !== next) { this.window.setIgnoreMouseEvents(next, { forward: true }); this.ignored = next; }
   }
   setClickThrough(value: boolean) { this.endDrag(); this.settings.clickThrough = value; this.applyMousePolicy(); this.sendState(); this.refreshTray(); this.save(); }
+  setCoat(coat: CatCoat) { this.settings.coat = coat; this.sendState(); this.refreshTray(); this.save(); }
   beginPress() {
     if (this.settings.clickThrough || this.menuOpen || this.hidden || this.systemStops.size || this.pointerPressed) return;
     const bounds = this.window.getBounds(), cursor = screen.getCursorScreenPoint();
@@ -529,6 +532,7 @@ export class PetController {
       checkbox('pause', '잠시 멈추기', this.paused, () => this.setPaused(!this.paused)),
       { type: 'separator' },
       { label: '고양이 크기', submenu: [['작게', .75], ['보통', 1], ['크게', 1.35]].map(([label, size]) => checkbox(`size-${size}`, String(label), this.settings.size === size, () => this.setSize(Number(size)))) },
+      { label: '고양이 색상', submenu: (Object.keys(COATS) as CatCoat[]).map(coat => ({ id: `coat-${coat}`, label: COATS[coat].name, type: 'radio', checked: this.settings.coat === coat, click: () => this.setCoat(coat) })) },
       { label: '모니터로 이동', submenu: screen.getAllDisplays().map((display, index) => checkbox(`display-${display.id}`, `모니터 ${index + 1}${display.id === screen.getPrimaryDisplay().id ? ' (주 화면)' : ''}`, display.id === this.display.id, () => this.moveToDisplay(display))) },
       { label: '자리 배치', submenu: [
         ...(['bottom-left', 'bottom-center', 'bottom-right'] as const).map((anchor, index) => ({ label: ['왼쪽 아래', '가운데 아래', '오른쪽 아래'][index], click: () => this.placeAnchor(anchor, this.display) })),
