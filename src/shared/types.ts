@@ -1,5 +1,6 @@
 import type { CatCoat } from './coats.js';
 export type Pose = 'sitting' | 'walking' | 'sleeping' | 'held' | 'stretching' | 'grooming' | 'petted' | 'pawing';
+export type AwakeMode = 0 | 30 | 60 | 120 | 'session';
 export interface Point { x: number; y: number }
 export interface Bounds extends Point { width: number; height: number }
 export interface PetState {
@@ -15,7 +16,7 @@ export interface PetState {
   speed: number;
 }
 export interface Settings {
-  version: 3;
+  version: 4;
   coat: CatCoat;
   displayId: string;
   displayLabel: string;
@@ -26,7 +27,6 @@ export interface Settings {
   floorOnly: boolean;
   clickThrough: boolean;
   allWorkspaces: boolean;
-  keepAwake: boolean;
   presets: PositionPreset[];
 }
 export interface PositionPreset {
@@ -45,7 +45,8 @@ export interface PreferencesSnapshot {
   floorOnly: boolean;
   clickThrough: boolean;
   allWorkspaces: boolean;
-  keepAwake: boolean;
+  awakeMode: AwakeMode;
+  awakeEndsAt: number | null;
   hidden: boolean;
   paused: boolean;
   platform: string;
@@ -56,7 +57,8 @@ export interface PreferencesSnapshot {
 export type PreferencesCommand =
   | { kind: 'coat'; value: CatCoat }
   | { kind: 'size'; value: number }
-  | { kind: 'roaming' | 'floor-only' | 'click-through' | 'all-workspaces' | 'keep-awake' | 'hidden' | 'paused'; value: boolean }
+  | { kind: 'roaming' | 'floor-only' | 'click-through' | 'all-workspaces' | 'hidden' | 'paused'; value: boolean }
+  | { kind: 'keep-awake'; mode: AwakeMode }
   | { kind: 'display'; id: string }
   | { kind: 'anchor'; anchor: Anchor; displayId: string }
   | { kind: 'save-position'; name: string }

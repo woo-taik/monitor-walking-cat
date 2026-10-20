@@ -38,6 +38,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .toggle { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 9px 0; cursor: pointer; }
 .toggle strong { font-weight: 500; display: block; }
 .toggle small { font-size: 11px; color: #8a7c71; display: block; margin-top: 4px; }
+.select-row strong { font-weight: 500; display: block; }
+.select-row small { font-size: 11px; color: #8a7c71; display: block; margin-top: 4px; }
 input[type="checkbox"] { accent-color: #8b6548; width: 18px; height: 18px; cursor: pointer; }
 .select-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 8px 0; }
 select { padding: 7px 10px; max-width: 250px; min-width: 148px; }

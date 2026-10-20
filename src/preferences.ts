@@ -1,6 +1,6 @@
 import { catSVG } from './cat.js';
 import { COATS, type CatCoat } from './shared/coats.js';
-import type { Anchor, PreferencesAPI, PreferencesCommand, PreferencesSnapshot } from './shared/types.js';
+import type { Anchor, AwakeMode, PreferencesAPI, PreferencesCommand, PreferencesSnapshot } from './shared/types.js';
 declare global { interface Window { preferences?: PreferencesAPI } }
 const byId = <T extends HTMLElement>(id: string) => document.getElementById(id)! as T;
 const status = byId('status'), name = byId<HTMLInputElement>('preset-name');
@@ -13,14 +13,28 @@ for (const coat of Object.keys(COATS) as CatCoat[]) {
 }
 let snapshot: PreferencesSnapshot | undefined, displayKey = '', presetKey = '', queue = Promise.resolve();
 function message(text: string, error = false) { status.textContent = text; status.classList.toggle('error', error); }
+function updateAwakeRemaining() {
+  if (!snapshot) return;
+  const target = byId('awake-remaining');
+  if (snapshot.awakeMode === 0) target.textContent = '꺼져 있어요. 필요할 때 다시 켜 주세요.';
+  else if (snapshot.awakeMode === 'session') target.textContent = '앱을 종료하면 자동으로 꺼져요.';
+  else {
+    const seconds = Math.max(0, Math.ceil(((snapshot.awakeEndsAt ?? Date.now()) - Date.now()) / 1000));
+    const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = seconds % 60;
+    target.textContent = `남은 시간 ${hours ? `${hours}:` : ''}${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
+  }
+}
 function render(next: PreferencesSnapshot) {
+  const expired = snapshot && snapshot.awakeMode !== 0 && next.awakeMode === 0 && snapshot.awakeEndsAt !== null && Date.now() >= snapshot.awakeEndsAt;
   snapshot = next;
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="coat"]')) radio.checked = radio.value === next.coat;
   for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="size"]')) radio.checked = Number(radio.value) === next.size;
   byId<HTMLInputElement>('roaming').checked = next.roaming;
   byId<HTMLSelectElement>('floor').value = next.floorOnly ? 'floor' : 'desktop';
   byId<HTMLInputElement>('click-through').checked = next.clickThrough;
-  byId<HTMLInputElement>('keep-awake').checked = next.keepAwake;
+  byId<HTMLSelectElement>('keep-awake').value = String(next.awakeMode);
+  updateAwakeRemaining();
+  if (expired) message('설정한 시간이 지나 화면보호기 방지가 꺼졌어요.');
   byId<HTMLInputElement>('workspaces').checked = next.allWorkspaces;
   byId('workspaces-row').hidden = next.platform !== 'darwin';
   byId('ghost-note').hidden = !next.clickThrough;
@@ -64,11 +78,17 @@ function post(command: PreferencesCommand) {
     message('반영하고 있어요…');
     const result = await window.preferences.change(command); render(result.snapshot);
     if (command.kind === 'save-position' && name.value.trim() === command.name.trim()) name.value = '';
-    message(result.notice ?? '바로 반영했습니다. 설정은 자동으로 저장됩니다.');
+    message(result.notice ?? (command.kind === 'keep-awake'
+      ? command.mode === 0 ? '화면보호기 방지를 껐어요.' : '바로 반영했습니다. 앱을 종료하면 자동으로 꺼집니다.'
+      : '바로 반영했습니다. 설정은 자동으로 저장됩니다.'));
   }).catch(error => message(String(error.message ?? error).replace(/^Error invoking remote method '[^']+': Error: /, ''), true));
 }
 for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="size"]')) radio.addEventListener('change', () => post({ kind: 'size', value: Number(radio.value) }));
-for (const [id, kind] of [['roaming', 'roaming'], ['click-through', 'click-through'], ['keep-awake', 'keep-awake'], ['workspaces', 'all-workspaces']] as const) byId<HTMLInputElement>(id).addEventListener('change', event => post({ kind, value: (event.target as HTMLInputElement).checked }));
+for (const [id, kind] of [['roaming', 'roaming'], ['click-through', 'click-through'], ['workspaces', 'all-workspaces']] as const) byId<HTMLInputElement>(id).addEventListener('change', event => post({ kind, value: (event.target as HTMLInputElement).checked }));
+byId<HTMLSelectElement>('keep-awake').addEventListener('change', event => {
+  const value = (event.target as HTMLSelectElement).value;
+  post({ kind: 'keep-awake', mode: value === 'session' ? 'session' : Number(value) as AwakeMode });
+});
 byId<HTMLSelectElement>('floor').addEventListener('change', event => post({ kind: 'floor-only', value: (event.target as HTMLSelectElement).value === 'floor' }));
 byId<HTMLSelectElement>('display').addEventListener('change', event => post({ kind: 'display', id: (event.target as HTMLSelectElement).value }));
 byId('pause').addEventListener('click', () => { if (snapshot) post({ kind: 'paused', value: !snapshot.paused }); });
@@ -77,3 +97,4 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-anchor]
 byId('save-form').addEventListener('submit', event => { event.preventDefault(); if (name.value.trim()) post({ kind: 'save-position', name: name.value.trim() }); });
 if (window.preferences) { window.preferences.onChange(render); window.preferences.read().then(render).catch(() => message('설정을 불러오지 못했습니다. 창을 다시 열어 주세요.', true)); }
 else message('설정을 연결하지 못했습니다. 창을 다시 열어 주세요.', true);
+setInterval(updateAwakeRemaining, 1000);

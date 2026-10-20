@@ -149,9 +149,9 @@ test('saved positions roundtrip across sizes and monitor resolution changes; mis
   assert.deepEqual(anchorPosition('bottom-right', small, 160, 144), { x: -80, y: 0 });
 });
 
-test('v2 settings migrate without losing options; presets validate, deduplicate, cap at eight and persist', () => {
+test('older settings migrate without losing options; presets validate, deduplicate, cap at eight and persist', () => {
   const old = validateSettings({ version: 2, size: .75, roaming: false, clickThrough: true, relativeX: .7 });
-  assert.equal(old.version, 3); assert.equal(old.size, .75); assert(old.clickThrough); assert(!old.roaming); assert.deepEqual(old.presets, []);
+  assert.equal(old.version, 4); assert.equal(old.size, .75); assert(old.clickThrough); assert(!old.roaming); assert.deepEqual(old.presets, []);
   const preset = { id: 'one', name: ' 문서 옆 ', displayId: 'secondary', displayLabel: 'Monitor', relativeX: -3, relativeY: 4 };
   const checked = validateSettings({ ...old, presets: [null, { ...preset, relativeX: 'wrong' }, preset, preset,
     { ...preset, id: 'two', name: '문서 옆' }, ...Array.from({ length: 10 }, (_, i) => ({ ...preset, id: `id-${i}`, name: `자리 ${i}` }))] });
@@ -170,8 +170,7 @@ test('screen saver nudge waits for a real absence, keeps the cat off the user an
   assert.equal(wantsNudge({ ...ready, busy: true }), false, 'never walks off while dragged, paused or hidden');
   assert.equal(wantsNudge({ ...ready, idleSeconds: NUDGE_IDLE_SECONDS - 1 }), false, 'someone still at the desk is left alone');
   assert.equal(wantsNudge({ ...ready, sinceNudge: NUDGE_INTERVAL_SECONDS - 1 }), false, 'shoves stay spaced out');
-  assert.equal(validateSettings({}).keepAwake, false, 'opt-in only');
-  assert.equal(validateSettings({ keepAwake: true }).keepAwake, true);
+  assert.equal(Object.hasOwn(validateSettings({ keepAwake: true }), 'keepAwake'), false, 'legacy screen-awake setting is session-only');
 });
 
 test('the cat faces inward for a shove and stays within reach at screen edges', () => {

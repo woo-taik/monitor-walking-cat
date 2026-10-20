@@ -8,7 +8,7 @@ const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 function verifyMonitorVisits(controller: PetController, lines: string[]) {
   const homeDisplay = screen.getPrimaryDisplay(), destinations = screen.getAllDisplays();
-  controller.setKeepAwake(true);
+  controller.setKeepAwake('session');
   for (const target of destinations) for (const roaming of [false, true]) {
     controller.changePreferences({ kind: 'anchor', anchor: 'bottom-center', displayId: String(homeDisplay.id) });
     controller.setRoaming(roaming);
@@ -65,7 +65,7 @@ function verifyMonitorVisits(controller: PetController, lines: string[]) {
   controller.startNudgeForVerification(cursor);
   screen.emit('display-metrics-changed', {}, homeDisplay, ['workArea']);
   assert.equal(controller.stepNudgeForVerification(.25, cursor).phase, 'idle', 'Layout changes must discard stale display routes');
-  controller.setKeepAwake(false); controller.setRoaming(false);
+  controller.setKeepAwake(0); controller.setRoaming(false);
   lines.push(`PASS: cursor visits and return home on ${destinations.length} connected display(s), pinned and roaming; cursor monitor changes retarget visits; saved home stays unchanged; drag, pause, monitor selection and layout changes cancel visits (simulated time, no cursor movement).`);
 }
 
@@ -156,13 +156,27 @@ export async function runCiSmoke(controller: PetController, output: string) {
     lines.push('PASS: three coat controls apply while paused; all 24 coat/pose combinations render; placement and behavior stay unchanged; tray synchronizes; invalid coats rejected.');
     await preferences.webContents.executeJavaScript("window.preferences.change({kind:'size',value:.75})");
     assert.equal(controller.settings.size, .75);
+    assert.equal(controller.preferencesSnapshot().awakeMode, 0, 'Screen awake starts off, even in a saved profile');
+    await preferences.webContents.executeJavaScript("document.querySelector('#keep-awake').value='30'; document.querySelector('#keep-awake').dispatchEvent(new Event('change'))");
+    for (let tries = 0; tries < 100 && controller.preferencesSnapshot().awakeMode !== 30; tries++) await wait(25);
+    const awake = controller.preferencesSnapshot();
+    assert.equal(awake.awakeMode, 30); assert(awake.awakeEndsAt! > Date.now());
+    assert(await preferences.webContents.executeJavaScript("document.querySelector('#awake-remaining').textContent.includes('남은 시간')"));
+    assert.equal(controller.menu().getMenuItemById('keep-awake-30')?.checked, true);
+    assert.equal(controller.checkKeepAwakeExpiry(awake.awakeEndsAt!), true);
+    assert.equal(controller.preferencesSnapshot().awakeMode, 0);
+    controller.menu().getMenuItemById('keep-awake-session')!.click();
+    assert.equal(controller.preferencesSnapshot().awakeMode, 'session');
+    controller.menu().getMenuItemById('keep-awake-off')!.click();
+    assert.equal(controller.preferencesSnapshot().awakeMode, 0);
+    assert.equal(await preferences.webContents.executeJavaScript("window.preferences.change({kind:'keep-awake',mode:999}).then(()=>false,()=>true)"), true);
     await preferences.webContents.executeJavaScript("window.preferences.change({kind:'save-position',name:'CI position'})");
     const snapshot = await preferences.webContents.executeJavaScript('window.preferences.read()');
     assert.equal(snapshot.presets[0].name, 'CI position');
     assert.equal(await preferences.webContents.executeJavaScript('document.querySelectorAll("#display option").length'), snapshot.displays.length);
     fs.writeFileSync(path.join(output, 'preferences.png'), (await preferences.webContents.capturePage()).toPNG());
     preferences.close(); assert(!win.isDestroyed());
-    lines.push('PASS: packaged settings HTML/CSS/preload initialize; settings and position IPC work.');
+    lines.push('PASS: packaged settings, awake timer/expiry/menu and position IPC work.');
     lines.push(`INFO: ${process.platform}/${process.arch}, Electron ${process.versions.electron}; automated runtime checks do not verify physical input, Spaces or notarization.`);
   } catch (error) { lines.push(`FAIL: ${String(error)}`); throw error; }
   finally { fs.writeFileSync(path.join(output, 'ci-smoke.txt'), lines.join('\n') + '\n'); console.log(lines.join('\n')); }
